@@ -2,6 +2,7 @@ import React from 'react'
 import { C, MONO, styles } from './theme.js'
 import { createCommon } from './common.js'
 import { createSessionTables } from './tables.js'
+import { createFeatureNavigation } from './feature-navigation.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
 
@@ -14,6 +15,7 @@ const FEATURES_PATH = '/qqbot-tool-dispatch/features'
 const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
 const { readJson, postJson, formatRelative, formatAbsolute, PanelIcon, Switch, StatusPill, Section } = createCommon({ h, C, styles })
 const { SessionTable, PeerTable } = createSessionTables({ h, C, MONO, styles, formatRelative, formatAbsolute, StatusPill })
+const FeatureNavigation = createFeatureNavigation({ h, styles })
 const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
 const ChatCard = createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
 
@@ -24,11 +26,10 @@ function DispatchSessionsPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState(null)
   const [tab, setTab] = useState('sessions')
-  const [openFeatureId, setOpenFeatureId] = useState(null)
+  const [selectedFeatureId, setSelectedFeatureId] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [sessionLoading, setSessionLoading] = useState(false)
   const [rowBusy, setRowBusy] = useState('')
-  const autoOpened = useRef(false)
   const sessionRequestId = useRef(0)
 
   const refreshSessions = useCallback(async (showLoading = false) => {
@@ -100,6 +101,7 @@ function DispatchSessionsPage() {
       const num = body?.info?.group_member_num
       setNotice({ kind: 'ok', text: `已同步：${name}${typeof num === 'number' && num > 0 ? ` · ${num} 人` : ''}` })
     } catch (failure) {
+      await refreshSessions()
       setNotice({ kind: 'error', text: `同步群信息失败：${String(failure?.message ?? failure)}` })
     } finally {
       setRowBusy('')
@@ -125,15 +127,6 @@ function DispatchSessionsPage() {
     }
   }, [refreshSessions])
 
-  // Open the first feature exactly once; a later collapse must stay collapsed.
-  useEffect(() => {
-    if (autoOpened.current) return
-    const first = features?.features?.[0]
-    if (first === undefined) return
-    autoOpened.current = true
-    setOpenFeatureId((current) => current ?? first.id)
-  }, [features])
-
   useEffect(() => {
     if (notice === null) return undefined
     const timer = setTimeout(() => setNotice(null), 4000)
@@ -142,6 +135,9 @@ function DispatchSessionsPage() {
 
   const sessions = snapshot?.sessions ?? []
   const entries = snapshot?.entries ?? []
+  const activeFeatureId = features?.features.some((feature) => feature.id === selectedFeatureId)
+    ? selectedFeatureId
+    : features?.features[0]?.id
 
   return h('div', { style: styles.page },
     h('style', null, [
@@ -150,6 +146,11 @@ function DispatchSessionsPage() {
       '.qqd-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }',
       '.qqd-tab:hover { color: var(--dsw-alias-label-primary); }',
       '.qqd-tab-active:hover { color: var(--dsw-alias-brand-primary); }',
+      '.qqd-feature-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; align-items: start; }',
+      '.qqd-feature-nav { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 12px; min-width: 0; }',
+      '.qqd-feature-nav-item:hover { background: var(--dsw-alias-bg-layer-2) !important; }',
+      '.qqd-feature-nav-item:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }',
+      '@container (max-width: 700px) { .qqd-feature-layout { grid-template-columns: minmax(0, 1fr); } .qqd-feature-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 4px; } .qqd-feature-nav-item { min-width: 140px; width: auto !important; flex: 0 0 auto; } }',
       '.qqd-slider { position: relative; flex: 1 1 auto; min-width: 120px; }',
       '.qqd-range { position: relative; height: 26px; }',
       '.qqd-range::before { content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 2px; border-radius: 2px; background: var(--dsw-alias-border-l2); }',
@@ -239,17 +240,23 @@ function DispatchSessionsPage() {
             '各模组独立保存开关与配置。赛事通知使用数据源；偶尔闲聊使用内置服务回合。'),
           features === null
             ? h('div', { style: styles.empty }, loading ? '读取中…' : '功能接口不可用（宿主未提供）')
-            : features.features.map((feature) => h(feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
-              key: feature.id,
-              feature,
-              sessions,
-              onRefreshSessions: refreshSessions,
-              open: openFeatureId === feature.id,
-              onToggle: () => setOpenFeatureId(openFeatureId === feature.id ? null : feature.id),
-              onSaved: (next) => setFeatures(next),
-              onRun: () => { void refreshFeatures() },
-              onNotice: setNotice,
-            })),
+            : h('div', { style: { containerType: 'inline-size' } }, h('div', { className: 'qqd-feature-layout' },
+              h(FeatureNavigation, { features: features.features, selectedId: activeFeatureId, onSelect: setSelectedFeatureId }),
+              h('div', { style: { minWidth: 0 } },
+                ...features.features.map((feature) => h('div', { key: feature.id, hidden: activeFeatureId !== feature.id },
+                  h(feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
+                    feature,
+                    sessions,
+                    onRefreshSessions: refreshSessions,
+                    open: true,
+                    navigationMode: true,
+                    onToggle: () => {},
+                    onSaved: (next) => setFeatures(next),
+                    onRun: () => { void refreshFeatures() },
+                    onNotice: setNotice,
+                  }))),
+              ),
+            )),
         ),
       ),
 

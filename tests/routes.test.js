@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { registerDispatchRoutes } from '../routes.js'
 import { createSessionResolver } from '../session-resolver.js'
+import { createGroupHealthStore } from '../group-health.js'
 
 test('功能設定路由拒絕跨來源的寫入', async () => {
   const handlers = new Map()
@@ -29,6 +31,25 @@ test('功能設定路由拒絕跨來源的寫入', async () => {
   assert.equal(status, 403)
   assert.deepEqual(body, { error: 'forbidden' })
   assert.equal(saved, false)
+})
+
+test('立即发送请求显式传递重发选项', async () => {
+  const handlers = new Map()
+  const calls = []
+  registerDispatchRoutes({
+    inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
+    get: () => undefined,
+  }, {
+    resolver: createSessionResolver({ appId: 'app' }),
+    groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} },
+    features: { run: async (id, options) => { calls.push({ id, options }); return { matched: 1, sent: 1 } } },
+    defaultMode: 'queue', qqbotApi: {}, loadOptionalPatches: () => [],
+  })
+  const req = Readable.from([Buffer.from(JSON.stringify({ id: 'cs2-matches', forceResend: true }))])
+  req.method = 'POST'
+  req.headers = { host: 'localhost:3000' }
+  await handlers.get('/qqbot-tool-dispatch/features/run')(req, { writeHead: () => {}, end: () => {} })
+  assert.deepEqual(calls, [{ id: 'cs2-matches', options: { manual: true, forceResend: true } }])
 })
 
 test('側欄只列出上游已映射的 QQ 會話，即使工作目錄不同', async () => {
@@ -158,4 +179,56 @@ test('群資訊查詢拒絕過期的會話綁定', async () => {
   assert.equal(status, 409)
   assert.match(body.error, /映射已变化/)
   assert.equal(queried, false)
+})
+
+test('群信息查询失败不误判，成功重试后恢复已有不可用状态', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qqbot-dispatch-health-'))
+  const prefsPath = join(dir, 'model-prefs.json')
+  const peer = { scope: 'group', peerId: 'group-openid', sessionId: 'session-123' }
+  writeFileSync(prefsPath, JSON.stringify({ sessionIds: { 'qqbot:app:group:group-openid': peer.sessionId } }), 'utf8')
+  const groupHealth = createGroupHealthStore(join(dir, 'group-health.json'))
+  const handlers = new Map()
+  let groupState = 'temporary-error'
+  registerDispatchRoutes({
+    inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
+    get: (name) => name === 'sessionController' ? {
+      list: async () => [{ sessionId: peer.sessionId }],
+      projections: async () => ({ values: { title: '赛事群' } }),
+      rename: async () => {},
+    } : undefined,
+  }, {
+    resolver: createSessionResolver({ appId: 'app', prefsPath }),
+    groupHealth,
+    groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} },
+    features: {}, defaultMode: 'queue',
+    qqbotApi: {
+      readQqbotCredentials: async () => ({ appId: 'app' }),
+      groupInfo: async () => {
+        if (groupState === 'available') return { group_name: '赛事群' }
+        const error = new Error('群不可达')
+        error.httpStatus = groupState === 'temporary-error' ? 500 : 404
+        throw error
+      },
+    },
+    loadOptionalPatches: () => [],
+  })
+  const request = { method: 'POST', headers: { host: 'localhost:3000' } }
+  const response = { writeHead: () => {}, end: () => {} }
+  await handlers.get('/qqbot-tool-dispatch/titles/refresh')(request, response)
+  assert.equal(groupHealth.statusFor(peer), null)
+  groupState = 'unavailable'
+  await handlers.get('/qqbot-tool-dispatch/titles/refresh')(request, response)
+  assert.equal(groupHealth.statusFor(peer), null)
+  groupHealth.markUnavailable(peer, '群消息接口 HTTP 404')
+  await handlers.get('/qqbot-tool-dispatch/titles/refresh')(request, response)
+  assert.equal(groupHealth.statusFor(peer)?.status, 'unavailable')
+  let list
+  await handlers.get('/qqbot-tool-dispatch/sessions')(
+    { method: 'GET', headers: { host: 'localhost:3000' } },
+    { writeHead: () => {}, end: (value) => { list = JSON.parse(value) } },
+  )
+  assert.equal(list.sessions[0].groupStatus, 'unavailable')
+  groupState = 'available'
+  await handlers.get('/qqbot-tool-dispatch/titles/refresh')(request, response)
+  assert.equal(groupHealth.statusFor(peer), null)
 })

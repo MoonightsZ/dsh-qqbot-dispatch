@@ -6,7 +6,7 @@ function describeFailure(error) {
   return code === undefined ? message : `${code}: ${message}`
 }
 
-export function registerDispatchRoutes(ctx, { resolver, groupNames, features, defaultMode, qqbotApi, loadOptionalPatches }) {
+export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth, features, defaultMode, qqbotApi, loadOptionalPatches }) {
   const { resolvedAppId, knownPeers, prefsPath } = resolver
   const { readGroupNames, writeGroupNames } = groupNames
   ctx.inject(['webServer'], (scoped) => {
@@ -178,8 +178,10 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
       let skipped = 0
       let failed = 0
       for (const target of targets.values()) {
+        const peer = { scope: 'group', peerId: target.openid, sessionId: target.sessionId }
         try {
           const info = await qqbotApi.groupInfo(target.openid, credentials)
+          groupHealth?.markAvailable(peer)
           const name = typeof info?.group_name === 'string' ? info.group_name.trim() : ''
           if (name === '') throw new Error('接口没有返回 group_name')
           const preview = await sessionPreview(controller, target.sessionId, true)
@@ -229,10 +231,13 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
             const groupNames = readGroupNames()
             sessions = sessions.map((row) => {
               if (row.scope !== 'group') return row
+              const health = groupHealth?.statusFor(row)
+              const status = health === null || health === undefined ? {} : { groupStatus: health.status, groupStatusReason: health.reason }
               const known = groupNames[row.peerId]
-              if (known === undefined) return { ...row, groupOpenid: row.peerId }
+              if (known === undefined) return { ...row, groupOpenid: row.peerId, ...status }
               return {
                 ...row,
+                ...status,
                 groupName: known.name,
                 groupMemberNum: known.memberNum,
                 groupClassText: known.classText,
@@ -242,7 +247,8 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
             const byId = new Map(sessions.map((row) => [row.sessionId, row]))
             const entries = peers.filter((entry) => !archived.has(entry.sessionId)).map((entry) => {
               const row = byId.get(entry.sessionId)
-              return { ...entry, hasSession: live.has(entry.sessionId), exists: row !== undefined }
+              const groupStatus = groupHealth?.statusFor(entry)?.status
+              return { ...entry, hasSession: live.has(entry.sessionId), exists: row !== undefined, ...(groupStatus === undefined || groupStatus === null ? {} : { groupStatus }) }
             })
             sendJson(res, 200, {
               appId,
@@ -333,11 +339,13 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
               return
             }
             const targetSessionId = prefsId
+            const peer = { scope: 'group', peerId: openid, sessionId: targetSessionId }
             const cached = groupCache.get(openid)
-            const fresh = url.searchParams.get('fresh') === '1'
+            const fresh = url.searchParams.get('fresh') === '1' || groupHealth?.statusFor(peer)?.status === 'unavailable'
             let info = !fresh && cached !== undefined && Date.now() - cached.at < GROUP_CACHE_MS ? cached.info : undefined
             if (info === undefined) {
               info = await qqbotApi.groupInfo(openid, credentials)
+              groupHealth?.markAvailable(peer)
               groupCache.set(openid, { at: Date.now(), info })
             }
             let members
@@ -397,7 +405,10 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
           }
           try {
             const body = await readJsonBody(req)
-            const result = await Promise.resolve(features.run(String(body?.id ?? ''), { manual: true }))
+            const result = await Promise.resolve(features.run(String(body?.id ?? ''), {
+              manual: true,
+              ...(body?.id === 'cs2-matches' && body?.forceResend === true ? { forceResend: true } : {}),
+            }))
             sendJson(res, 200, { result })
           } catch (error) {
             sendJson(res, 400, { error: describeFailure(error) })

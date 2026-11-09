@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readPrefs, sessionKey } from './session-resolver.js'
+import { assertGroupAvailable } from './group-health.js'
 
 function describeFailure(error) {
   const code = error?.code ?? error?.name
@@ -8,7 +9,7 @@ function describeFailure(error) {
   return code === undefined ? message : `${code}: ${message}`
 }
 
-export function registerDispatchTools(ctx, { resolver, defaultMode }) {
+export function registerDispatchTools(ctx, { resolver, defaultMode, groupHealth }) {
   const { resolvedAppId, resolveTarget, prefsPath } = resolver
   ctx.tools.register(defineTool({
     name: 'qqbot_dispatch',
@@ -57,6 +58,7 @@ export function registerDispatchTools(ctx, { resolver, defaultMode }) {
     },
     async execute(args, exec) {
       const target = resolveTarget(args.scope, args.peerId)
+      assertGroupAvailable(groupHealth, { scope: args.scope, peerId: args.peerId, sessionId: target.sessionId })
       const mode = args.mode ?? defaultMode
       if (mode !== 'queue' && mode !== 'steer') throw new Error(`mode must be "queue" or "steer", received "${mode}"`)
       const signal = exec?.signal ?? new AbortController().signal
@@ -113,6 +115,7 @@ export function registerDispatchTools(ctx, { resolver, defaultMode }) {
                 sessionId: { type: 'string', required: true, description: 'Session id the peer resolves to.' },
                 resolvedFrom: { type: 'string', required: true, description: '"prefs" or "derived".' },
                 hasSession: { type: 'boolean', required: true, description: 'Whether the Session is attached right now.' },
+                groupStatus: { type: 'string', description: 'unavailable when the group API confirmed this target is unreachable.' },
               },
             },
           },
@@ -122,7 +125,7 @@ export function registerDispatchTools(ctx, { resolver, defaultMode }) {
         type: 'text',
         text: value.entries.length === 0
           ? `no peers recorded in ${value.prefsPath}`
-          : value.entries.map((entry) => `${entry.sessionKey} → ${entry.sessionId} (${entry.resolvedFrom}, ${entry.hasSession ? 'live' : 'cold'})`).join('\n'),
+          : value.entries.map((entry) => `${entry.sessionKey} → ${entry.sessionId} (${entry.resolvedFrom}, ${entry.hasSession ? 'live' : 'cold'}${entry.groupStatus === 'unavailable' ? ', 群不可用' : ''})`).join('\n'),
       }],
     },
     execute(args) {
@@ -130,6 +133,7 @@ export function registerDispatchTools(ctx, { resolver, defaultMode }) {
       const prefix = `qqbot:${appId}:`
       const entries = []
       const push = (scope, peerId, sessionId, from) => {
+        const groupStatus = groupHealth?.statusFor({ scope, peerId, sessionId })?.status
         entries.push({
           sessionKey: sessionKey(appId, scope, peerId),
           scope,
@@ -137,6 +141,7 @@ export function registerDispatchTools(ctx, { resolver, defaultMode }) {
           sessionId,
           resolvedFrom: from,
           hasSession: ctx.get('sessions')?.get(sessionId) !== undefined,
+          ...(groupStatus === undefined ? {} : { groupStatus }),
         })
       }
       if (args.scope !== undefined || args.peerId !== undefined) {

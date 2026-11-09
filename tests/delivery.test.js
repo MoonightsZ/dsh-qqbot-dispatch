@@ -37,3 +37,23 @@ test('舊群名快取不得令新會話直發到錯誤群', async () => {
   await deliver({ target: { sessionId: 'session-new' }, text: '提醒' })
   assert.deepEqual(calls, ['current_group'])
 })
+
+test('群消息接口返回 404 时暂停目标，不回退为服务回合', async () => {
+  const peer = { scope: 'group', peerId: 'group-openid', sessionId: 'session-123' }
+  const marked = []
+  let fallback = false
+  const failure = new Error('群不可达')
+  failure.httpStatus = 404
+  const deliver = createFeatureDelivery({}, {
+    resolver: { knownPeers: () => [peer] },
+    groupHealth: { statusFor: () => null, markUnavailable: (item) => { marked.push(item) } },
+    qqbotApi: {
+      readQqbotCredentials: async () => ({ appId: 'app' }),
+      sendGroupText: async () => { throw failure },
+    },
+    serviceTurn: { dispatch: async () => { fallback = true } },
+  })
+  await assert.rejects(deliver({ target: { sessionId: peer.sessionId }, text: '提醒' }), /群不可用/)
+  assert.deepEqual(marked, [peer])
+  assert.equal(fallback, false)
+})

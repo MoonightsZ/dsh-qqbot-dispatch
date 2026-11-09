@@ -258,7 +258,7 @@ export function createFeatureRuntime(options) {
   }
 
   /** A provider may later fill this in; until then a run only records the gap. */
-  function run(id, { manual = false } = {}) {
+  function run(id, { manual = false, forceResend = false } = {}) {
     const entry = descriptor(id)
     const state = read()
     const feature = state.features[id] ?? defaultState(id).features[id]
@@ -283,7 +283,7 @@ export function createFeatureRuntime(options) {
       .then(async () => {
         const sessionId = String(feature.target?.sessionId ?? '').trim()
         if (sessionId === '') throw new Error('未选择目标会话')
-        const outcome = await provider({ feature, target: { sessionId }, ctx, now, manual })
+        const outcome = await provider({ feature, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend })
         result.matched = Number(outcome?.matched ?? 0)
         result.sent = Number(outcome?.sent ?? 0)
         if (typeof outcome?.error === 'string') result.error = outcome.error

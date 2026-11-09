@@ -25,6 +25,7 @@
     "service-turn.js",
     "modules/",
     "group-names.js",
+    "group-health.js",
     "features.js",
     "cron.js",
     "qqbot-creds.js",

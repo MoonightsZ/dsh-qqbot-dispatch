@@ -42,3 +42,17 @@ test('會話持久化未確認時回報提交失敗', async () => {
   const dispatcher = createServiceTurnDispatcher(ctx, { resolver: { knownPeers: () => [{ sessionId: 'session-123' }] }, createUserMessage: (data) => data })
   await assert.rejects(dispatcher.dispatch({ sessionId: 'session-123', text: '提醒' }), /持久化未確認/)
 })
+
+test('群不可用时闲聊等服务回合不会唤醒旧会话', async () => {
+  let resolved = false
+  const peer = { sessionId: 'session-123', scope: 'group', peerId: 'group-openid' }
+  const dispatcher = createServiceTurnDispatcher({
+    sessionController: { resolveAgent: async () => { resolved = true; return {} } },
+  }, {
+    resolver: { knownPeers: () => [peer] },
+    groupHealth: { statusFor: () => ({ status: 'unavailable' }) },
+    createUserMessage: (data) => data,
+  })
+  await assert.rejects(dispatcher.dispatch({ sessionId: peer.sessionId, text: '闲聊' }), /群不可用/)
+  assert.equal(resolved, false)
+})

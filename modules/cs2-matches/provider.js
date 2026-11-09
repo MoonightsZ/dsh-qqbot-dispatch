@@ -239,7 +239,8 @@ function pruneSeen(feature) {
  */
 export function createLiquipediaProvider(options = {}) {
   const deliver = options.deliver
-  return async ({ feature, target, ctx, now }) => {
+  const readMatches = options.loadMatches ?? loadMatches
+  return async ({ feature, target, ctx, now, forceResend = false }) => {
     const sourceId = feature.source?.id ?? 'none'
     if (sourceId === 'none') return { matched: 0, sent: 0, error: '数据源尚未接入' }
     if (sourceId !== 'liquipedia') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现，请选择 Liquipedia` }
@@ -247,7 +248,7 @@ export function createLiquipediaProvider(options = {}) {
     const checkedAt = now()
     const matches = parseCache.at !== 0 && checkedAt - parseCache.at < PARSE_CACHE_MS
       ? parseCache.matches
-      : (await loadMatches())
+      : (await readMatches())
     if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
 
     const watched = Array.isArray(feature.values?.teams) ? feature.values.teams : []
@@ -265,7 +266,7 @@ export function createLiquipediaProvider(options = {}) {
 
     pruneSeen(feature)
     const fresh = selected
-      .filter((match) => feature.seen[match.id] === undefined)
+      .filter((match) => forceResend || feature.seen[match.id] === undefined)
       .sort((left, right) => left.timestamp - right.timestamp)
 
     if (fresh.length === 0) return { matched: selected.length, sent: 0 }

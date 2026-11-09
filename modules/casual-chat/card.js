@@ -4,7 +4,7 @@ import { sessionTargetOptions } from '../../client/session-options.js'
 export function createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
   const { useState } = React
 
-  function ChatCard({ feature, sessions, open, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
+  function ChatCard({ feature, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
     const values = feature.values ?? {}
     const [enabled, setEnabled] = useState(feature.enabled === true)
     const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
@@ -35,7 +35,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
     }
 
     const persist = async (nextEnabled) => {
-      if (nextEnabled !== false && sessionTargetOptions(sessions, sessionId).invalidSelected) throw new Error('目标会话已失效，请重新选择')
+      if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(checkTime)) throw new Error('每日检查时间无效')
       const next = await postJson(FEATURES_PATH, payload(nextEnabled))
       setEnabled(next.features.find((entry) => entry.id === feature.id)?.enabled === true)
@@ -80,13 +80,12 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
 
     return h('div', { style: enabled ? { ...styles.card, ...styles.cardOn } : styles.card },
       h('div', {
-        style: { ...styles.cardHead, cursor: 'pointer' }, onClick: onToggle,
-        role: 'button', 'aria-expanded': open, tabIndex: 0,
-        onKeyDown: (event) => {
+        style: { ...styles.cardHead, ...(navigationMode ? {} : { cursor: 'pointer' }) },
+        ...(navigationMode ? {} : { onClick: onToggle, role: 'button', 'aria-expanded': open, tabIndex: 0, onKeyDown: (event) => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle() }
-        },
+        } }),
       },
-        h('span', { className: 'qqd-chev', style: { transform: open ? 'rotate(90deg)' : 'none' } }, '▸'),
+        navigationMode ? null : h('span', { className: 'qqd-chev', style: { transform: open ? 'rotate(90deg)' : 'none' } }, '▸'),
         h('span', { style: styles.cardTitle }, feature.label),
         h('span', { style: styles.chip }, '内置'),
         h('span', { style: styles.chip }, `每日 ${checkTime} 检查`),
@@ -108,7 +107,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
           field('安静时段结束（小时）', numberInput(quietEnd, setQuietEnd, 0, 23)),
           field('话题提示（多个话题用 | 分隔）', h('input', { style: styles.input, value: topics, maxLength: 120, placeholder: '留空使用内置话题', onChange: (event) => setTopics(event.target.value) })),
         ),
-        targetOptions.invalidSelected ? h('p', { style: styles.warnText }, '目标会话已失效，请重新选择并保存。') : null,
+        targetOptions.invalidSelected ? h('p', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
         h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会避开最近 6 小时有活动的会话；“立即发起”会跳过这些限制。`),
         h('p', { style: styles.desc },
           (cronRules(feature.cron)[0] ?? '') !== (() => { const [hour, minute] = checkTime.split(':').map(Number); return `${minute} ${hour} * * *` })()

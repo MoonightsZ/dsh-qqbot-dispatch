@@ -3,6 +3,7 @@ import { createFeatureRuntime } from './features.js'
 import { createLiquipediaProvider } from './modules/cs2-matches/provider.js'
 import { createSessionResolver } from './session-resolver.js'
 import { createGroupNameStore } from './group-names.js'
+import { createGroupHealthStore } from './group-health.js'
 import { createFeatureDelivery } from './delivery.js'
 import { createServiceTurnDispatcher } from './service-turn.js'
 import { createChatProvider } from './modules/casual-chat/provider.js'
@@ -18,13 +19,14 @@ export const inject = ['tools', 'sessionController', 'sessions', 'sessionPersist
 export function apply(ctx, config = {}) {
   const resolver = createSessionResolver({ appId: config.appId, prefsPath: config.prefsPath })
   const groupNames = createGroupNameStore()
+  const groupHealth = createGroupHealthStore(config.groupHealthPath)
   const defaultMode = config.defaultMode ?? 'queue'
   const features = createFeatureRuntime({ ctx })
-  const serviceTurn = createServiceTurnDispatcher(ctx, { resolver, createUserMessage })
-  const deliver = createFeatureDelivery(groupNames, { resolver, qqbotApi, loadOptionalPatches, serviceTurn })
+  const serviceTurn = createServiceTurnDispatcher(ctx, { resolver, groupHealth, createUserMessage })
+  const deliver = createFeatureDelivery(groupNames, { resolver, groupHealth, qqbotApi, loadOptionalPatches, serviceTurn })
   features.registerProvider('cs2-matches', createLiquipediaProvider({ deliver }))
   features.registerProvider('casual-chat', createChatProvider({ serviceTurn }))
   ctx.effect(() => features.start(), 'qqbot-dispatch.features')
-  registerDispatchTools(ctx, { resolver, defaultMode })
-  registerDispatchRoutes(ctx, { resolver, groupNames, features, defaultMode, qqbotApi, loadOptionalPatches })
+  registerDispatchTools(ctx, { resolver, defaultMode, groupHealth })
+  registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth, features, defaultMode, qqbotApi, loadOptionalPatches })
 }

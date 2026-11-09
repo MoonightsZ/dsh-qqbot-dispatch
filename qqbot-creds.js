@@ -133,6 +133,7 @@ async function botGet(path, credentials) {
   if (!response.ok) {
     const error = new Error(data.message ?? `HTTP ${response.status}`)
     error.code = data.code
+    error.httpStatus = response.status
     throw error
   }
   return data
@@ -155,6 +156,7 @@ export async function sendGroupText(groupOpenid, content, credentials) {
   if (!response.ok) {
     const error = new Error(data.message ?? `HTTP ${response.status}`)
     error.code = data.code
+    error.httpStatus = response.status
     throw error
   }
   return data
@@ -172,6 +174,7 @@ export async function sendGroupCard(groupOpenid, card, credentials) {
   if (!response.ok) {
     const error = new Error(data.message ?? `HTTP ${response.status}`)
     error.code = data.code
+    error.httpStatus = response.status
     throw error
   }
   return data
@@ -189,6 +192,7 @@ export async function sendGroupMarkdown(groupOpenid, content, credentials) {
   if (!response.ok) {
     const error = new Error(data.message ?? `HTTP ${response.status}`)
     error.code = data.code
+    error.httpStatus = response.status
     throw error
   }
   return data

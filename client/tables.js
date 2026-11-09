@@ -17,7 +17,9 @@ function SessionTable({ rows, rowBusy, onRefresh }) {
         ),
         h('div', { style: styles.rowSub, title: row.sessionId }, row.sessionId),
       ),
-      h('td', { style: styles.td }, h(StatusPill, { live: row.hasSession })),
+      h('td', { style: styles.td }, row.groupStatus === 'unavailable'
+        ? h('span', { style: { color: C.warn }, title: row.groupStatusReason ?? '群不可用' }, '群不可用')
+        : h(StatusPill, { live: row.hasSession })),
       h('td', { style: { ...styles.td, textAlign: 'right', color: C.secondary, whiteSpace: 'nowrap' }, title: formatAbsolute(row.updatedAt) },
         formatRelative(row.updatedAt)),
       h('td', { style: { ...styles.td, textAlign: 'right', whiteSpace: 'nowrap' } },
@@ -48,7 +50,7 @@ function PeerTable({ rows }) {
       h('td', { style: { ...styles.td, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all' } }, row.sessionKey),
       h('td', { style: styles.td }, h('div', { style: styles.rowSub }, row.sessionId)),
       h('td', { style: styles.td }, row.resolvedFrom),
-      h('td', { style: styles.td }, row.exists ? h(StatusPill, { live: row.hasSession }) : '会话不存在'),
+      h('td', { style: styles.td }, row.groupStatus === 'unavailable' ? '群不可用' : !row.exists ? '会话不存在' : h(StatusPill, { live: row.hasSession })),
     ))),
   )
 }

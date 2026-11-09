@@ -128,7 +128,7 @@ function featureStatus(feature) {
   }
 }
 
-function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
+function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
   const values = feature.values ?? {}
   const [enabled, setEnabled] = useState(feature.enabled === true)
   const [teams, setTeams] = useState(Array.isArray(values.teams) ? values.teams : [])
@@ -176,18 +176,23 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
     ...(overrides ?? {}),
   })
 
+  const persist = async (nextEnabled, overrides) => {
+    if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
+    if (scheduleMode === 'cron' && describeCron(cronEntries) === null) throw new Error('Cron 规则无效')
+    const next = await postJson(FEATURES_PATH, payload(nextEnabled, overrides))
+    setApiKey('')
+    setClearKey(false)
+    const saved = next.features.find((item) => item.id === feature.id)
+    setEnabled(saved?.enabled === true)
+    setFocusCard(saved?.focusCard !== false)
+    onSaved(next)
+    return next
+  }
+
   const save = async (nextEnabled, overrides) => {
     setBusy(true)
     try {
-      if (nextEnabled !== false && sessionTargetOptions(sessions, sessionId).invalidSelected) throw new Error('目标会话已失效，请重新选择')
-      if (scheduleMode === 'cron' && describeCron(cronEntries) === null) throw new Error('Cron 规则无效')
-      const next = await postJson(FEATURES_PATH, payload(nextEnabled, overrides))
-      setApiKey('')
-      setClearKey(false)
-      const saved = next.features.find((item) => item.id === feature.id)
-      setEnabled(saved?.enabled === true)
-      setFocusCard(saved?.focusCard !== false)
-      onSaved(next)
+      await persist(nextEnabled, overrides)
       const action = nextEnabled === undefined ? '已保存' : nextEnabled ? '已开启' : '已关闭'
       onNotice({ kind: 'ok', text: `${feature.label} ${action}` })
     } catch (failure) {
@@ -197,17 +202,23 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
     }
   }
 
-  const run = async () => {
+  const run = async (forceResend = false) => {
     setBusy(true)
     try {
-      if (sessionTargetOptions(sessions, feature.target?.sessionId ?? '').invalidSelected) throw new Error('已保存的目标会话已失效，请重新选择并保存')
-      const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
-      if (result?.error) onNotice({ kind: 'error', text: `${feature.label} 检查失败：${result.error}` })
-      else if (result?.skipped) onNotice({ kind: 'ok', text: `${feature.label} 未开启，未执行` })
-      else onNotice({ kind: 'ok', text: `${feature.label} 检查完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}` })
+      if (forceResend) await persist()
+      else {
+        const savedTarget = sessionTargetOptions(sessions, feature.target?.sessionId ?? '')
+        if (savedTarget.invalidSelected) throw new Error(savedTarget.unavailableSelected ? '已保存的目标群不可用，请先同步群名确认' : '已保存的目标会话已失效，请重新选择并保存')
+      }
+      const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id, ...(forceResend ? { forceResend: true } : {}) })
+      const action = forceResend ? '发送' : '检查'
+      if (result?.error) onNotice({ kind: 'error', text: `${feature.label} ${action}失败：${result.error}` })
+      else if (result?.skipped) onNotice({ kind: 'ok', text: `${feature.label} 正在运行，请稍后重试` })
+      else if (forceResend && result?.matched === 0) onNotice({ kind: 'ok', text: `${feature.label} 未找到匹配赛事` })
+      else onNotice({ kind: 'ok', text: `${feature.label} ${action}完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}` })
       onRun()
     } catch (failure) {
-      onNotice({ kind: 'error', text: `${feature.label} 检查失败：${String(failure?.message ?? failure)}` })
+      onNotice({ kind: 'error', text: `${feature.label} ${forceResend ? '发送' : '检查'}失败：${String(failure?.message ?? failure)}` })
     } finally {
       setBusy(false)
     }
@@ -226,19 +237,15 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
 
   return h('div', { style: enabled ? { ...styles.card, ...styles.cardOn } : styles.card },
     h('div', {
-      style: { ...styles.cardHead, cursor: 'pointer' },
-      onClick: onToggle,
-      role: 'button',
-      'aria-expanded': open,
-      tabIndex: 0,
-      onKeyDown: (event) => {
+      style: { ...styles.cardHead, ...(navigationMode ? {} : { cursor: 'pointer' }) },
+      ...(navigationMode ? {} : { onClick: onToggle, role: 'button', 'aria-expanded': open, tabIndex: 0, onKeyDown: (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
           onToggle()
         }
-      },
+      } }),
     },
-      h('span', { className: 'qqd-chev', style: { transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s ease' } }, '▸'),
+      navigationMode ? null : h('span', { className: 'qqd-chev', style: { transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s ease' } }, '▸'),
       h('span', { style: styles.cardTitle }, feature.label),
       feature.provider === null
         ? h('span', { style: styles.chipWarn }, feature.providerLabel)
@@ -345,7 +352,7 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
           h('option', { value: '' }, '选择会话…'),
           ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
           h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项')),
-        targetOptions.invalidSelected ? h('span', { style: styles.warnText }, '目标会话已失效，请重新选择并保存。') : null,
+        targetOptions.invalidSelected ? h('span', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
       ),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '检查频率'),
@@ -432,6 +439,13 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
         disabled: busy,
         onClick: () => { void run() },
       }, '立即检查'),
+      h('button', {
+        type: 'button',
+        style: { ...styles.ghostButton, ...(busy ? styles.disabledButton : {}) },
+        disabled: busy,
+        title: '保存当前配置并重发所有匹配赛事，包括已通知过的赛事',
+        onClick: () => { void run(true) },
+      }, '立即发送'),
       h('span', { style: status.error ? styles.statusError : styles.statusLine }, status.text),
     ),
     ) : null,

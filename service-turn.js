@@ -1,11 +1,15 @@
+import { assertGroupAvailable } from './group-health.js'
+
 /** Submit a notification as this plugin's own service turn, including cold Sessions. */
-export function createServiceTurnDispatcher(ctx, { resolver, createUserMessage }) {
+export function createServiceTurnDispatcher(ctx, { resolver, groupHealth, createUserMessage }) {
   async function dispatch({ sessionId, text }) {
     if (typeof sessionId !== 'string' || sessionId.trim() === '') throw new Error('缺少目標 sessionId')
     if (typeof text !== 'string' || text.trim() === '') throw new Error('服務回合內容不可為空')
-    if (!resolver.knownPeers().some((peer) => peer.sessionId === sessionId)) {
+    const peer = resolver.knownPeers().find((entry) => entry.sessionId === sessionId)
+    if (peer === undefined) {
       throw new Error(`會話 ${sessionId} 未在 QQ Bot 映射中記錄，無法確認 QQ 對象`)
     }
+    assertGroupAvailable(groupHealth, peer)
     const resolved = await ctx.sessionController.resolveAgent(sessionId)
     if (resolved?.error !== undefined) throw resolved.error
     const agent = resolved?.agent

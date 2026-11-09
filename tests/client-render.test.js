@@ -28,6 +28,16 @@ test('有會話資料時可繪製會話列表', () => {
   assert.match(JSON.stringify(peers), /会话不存在/)
 })
 
+test('群不可用的会话仍可见并提示重新同步', () => {
+  const { SessionTable } = createSessionTables({ h, C, MONO, styles, ...common })
+  const view = SessionTable({
+    rows: [{ sessionId: 'session-dead', scope: 'group', groupOpenid: 'openid', groupStatus: 'unavailable', title: '旧群', hasSession: false }],
+    rowBusy: '', onRefresh: () => {},
+  })
+  assert.match(JSON.stringify(view), /群不可用/)
+  assert.match(JSON.stringify(view), /刷新群名/)
+})
+
 test('偶尔闲聊使用独立设置卡片', () => {
   const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
   const view = ChatCard({
@@ -60,4 +70,44 @@ test('有功能資料時可繪製設定卡片', () => {
   assert.match(JSON.stringify(view), /执行时间/)
   assert.match(JSON.stringify(view), /下次计划执行/)
   assert.match(JSON.stringify(view), /刷新选项/)
+})
+
+test('CS2 立即发送先保存当前配置再请求重发', async () => {
+  const calls = []
+  let finished
+  const done = new Promise((resolve) => { finished = resolve })
+  const FeatureCard = createFeatureCard({
+    React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (path, body) => {
+      calls.push({ path, body })
+      return path === '/features'
+        ? { features: [{ id: 'cs2-matches', enabled: body.enabled, focusCard: body.focusCard }] }
+        : { result: { matched: 1, sent: 1 } }
+    },
+  })
+  const view = FeatureCard({
+    feature: {
+      id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
+      values: { teams: ['Team A'], tiers: [] }, fields: [], intervalMinutes: 60,
+      scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: false,
+      credential: { configured: false, writable: false }, lastRunAt: 0,
+    },
+    sessions: [{ sessionId: 'session-1', scope: 'group', title: '赛事群' }], open: true,
+    onToggle: () => {}, onSaved: () => {}, onRun: finished, onNotice: () => {},
+  })
+  const buttons = []
+  const visit = (node) => {
+    if (Array.isArray(node)) { node.forEach(visit); return }
+    if (node === null || typeof node !== 'object') return
+    if (node.type === 'button') buttons.push(node)
+    node.children?.forEach(visit)
+  }
+  visit(view)
+  const send = buttons.find((button) => button.children.includes('立即发送'))
+  assert.ok(send)
+  send.props.onClick()
+  await done
+  assert.deepEqual(calls.map((call) => call.path), ['/features', '/features/run'])
+  assert.deepEqual(calls[1].body, { id: 'cs2-matches', forceResend: true })
 })

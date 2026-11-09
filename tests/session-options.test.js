@@ -18,4 +18,16 @@ test('失效的已选会话保留显示但不可重新选用', () => {
   const result = sessionTargetOptions([], 'session-old')
   assert.deepEqual(result.options, [{ value: 'session-old', label: '已失效 · sion-old', disabled: true }])
   assert.equal(result.invalidSelected, true)
+  assert.equal(result.unavailableSelected, false)
+})
+
+test('已确认不可用的群不进入下拉选项', () => {
+  const result = sessionTargetOptions([
+    { sessionId: 'session-dead', scope: 'group', groupStatus: 'unavailable', title: '旧群' },
+    { sessionId: 'session-live', scope: 'group', title: '新群' },
+  ], 'session-dead')
+  assert.equal(result.invalidSelected, true)
+  assert.equal(result.unavailableSelected, true)
+  assert.deepEqual(result.options.map((option) => option.value), ['session-live', 'session-dead'])
+  assert.equal(result.options[1].disabled, true)
 })

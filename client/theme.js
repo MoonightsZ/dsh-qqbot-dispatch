@@ -59,6 +59,21 @@ const styles = {
   sectionTitle: { fontSize: 13.5, fontWeight: 600 },
   sectionMeta: { color: C.secondary, fontSize: 11.5 },
   sectionAction: { marginLeft: 'auto' },
+  featureNavItem: {
+    display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3,
+    width: '100%', padding: '10px 12px', borderRadius: 9,
+    border: '1px solid transparent', background: 'transparent',
+    color: C.primary, cursor: 'pointer', textAlign: 'left',
+  },
+  featureNavActive: {
+    display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3,
+    width: '100%', padding: '10px 12px', borderRadius: 9,
+    border: `1px solid ${C.borderStrong}`, background: C.layer2,
+    color: C.brand, cursor: 'pointer', textAlign: 'left', fontWeight: 600,
+  },
+  featureNavLabel: { fontSize: 12.5, lineHeight: 1.35 },
+  featureNavEnabled: { fontSize: 11, color: C.ok, fontWeight: 400 },
+  featureNavDisabled: { fontSize: 11, color: C.secondary, fontWeight: 400 },
   card: {
     border: `1px solid ${C.borderStrong}`,
     borderRadius: 14,
