@@ -1,5 +1,6 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
 import { sessionTargetOptions } from '../../client/session-options.js'
+import { DEFAULT_CS2_SERVICE_TEMPLATE } from './template.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
   const { useState } = React
@@ -141,6 +142,8 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
   const [clearKey, setClearKey] = useState(false)
   const [intervalText, setIntervalText] = useState(String(feature.intervalMinutes ?? 60))
   const [focusCard, setFocusCard] = useState(feature.focusCard !== false)
+  const [deliveryMode, setDeliveryMode] = useState(feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct')
+  const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
   const [scheduleMode, setScheduleMode] = useState(feature.scheduleMode === 'cron' ? 'cron' : 'interval')
   const [cronEntries, setCronEntries] = useState(splitCronRules(feature.cron).length > 0 ? splitCronRules(feature.cron) : [''])
   const [busy, setBusy] = useState(false)
@@ -163,6 +166,8 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
     enabled: nextEnabled === undefined ? enabled : nextEnabled,
     target: { sessionId },
     focusCard,
+    deliveryMode,
+    serviceTemplate,
     scheduleMode,
     cron: cronEntries.map((entry) => entry.trim()).filter(Boolean),
     source: { id: sourceId, baseUrl: baseUrl.trim() },
@@ -215,6 +220,7 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
       if (result?.error) onNotice({ kind: 'error', text: `${feature.label} ${action}失败：${result.error}` })
       else if (result?.skipped) onNotice({ kind: 'ok', text: `${feature.label} 正在运行，请稍后重试` })
       else if (forceResend && result?.matched === 0) onNotice({ kind: 'ok', text: `${feature.label} 未找到匹配赛事` })
+      else if (result?.channel === 'service-turn') onNotice({ kind: 'ok', text: `${feature.label} 已提交 ${result?.sent ?? 0} 场赛事的服务回合，QQ 送达待确认` })
       else onNotice({ kind: 'ok', text: `${feature.label} ${action}完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}` })
       onRun()
     } catch (failure) {
@@ -325,6 +331,35 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
     ),
     h('div', { style: styles.divider }),
 
+    h('div', { style: styles.field },
+      h('span', { style: styles.label }, '通知投递方式'),
+      h('div', { style: styles.segmented },
+        h('button', { type: 'button', style: deliveryMode === 'direct' ? styles.segOn : styles.seg,
+          onClick: () => setDeliveryMode('direct') }, '直发优先'),
+        h('button', { type: 'button', style: deliveryMode === 'service-turn' ? styles.segOn : styles.seg,
+          onClick: () => setDeliveryMode('service-turn') }, '服务回合生成'),
+      ),
+      h('span', { style: styles.desc }, deliveryMode === 'service-turn'
+        ? '每个赛事提交一个服务回合，Agent 按模板生成对局与焦点分析；QQ 送达仍受平台限制。'
+        : '优先发送 QQ 卡片和 Markdown；失败时提交服务回合。'),
+    ),
+    deliveryMode !== 'service-turn' ? null : h('div', { style: { ...styles.field, marginTop: 12 } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        h('span', { style: styles.label }, 'Markdown 模板'),
+        h('button', { type: 'button', style: { ...styles.ghostButton, marginLeft: 'auto', padding: '3px 9px' },
+          onClick: () => setServiceTemplate(DEFAULT_CS2_SERVICE_TEMPLATE) }, '恢复默认模板'),
+      ),
+      h('textarea', {
+        style: { ...styles.input, minHeight: 180, resize: 'vertical', fontFamily: 'ui-monospace, monospace', lineHeight: 1.5 },
+        value: serviceTemplate,
+        maxLength: 6000,
+        'aria-label': 'CS2 赛事 Markdown 模板',
+        onChange: (event) => setServiceTemplate(event.target.value),
+      }),
+      h('span', { style: styles.desc }, '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。必须保留对局、焦点分析与 Liquipedia 来源；分析仅依据赛事数据和会话上下文。'),
+    ),
+    h('div', { style: styles.divider }),
+
     h('div', { style: styles.grid },
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '关注队伍（回车添加，留空=全部）'),
@@ -414,14 +449,16 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
           h(Switch, {
             checked: focusCard,
-            disabled: busy,
+            disabled: busy || deliveryMode === 'service-turn',
             label: '焦点战卡片',
             onChange: (next) => {
               setFocusCard(next)
               void save(undefined, { focusCard: next })
             },
           }),
-          h('span', { style: { color: C.secondary, fontSize: 11.5 } }, '为 24 小时内的焦点战单独发一张带图卡片'),
+          h('span', { style: { color: C.secondary, fontSize: 11.5 } }, deliveryMode === 'service-turn'
+            ? '服务回合模式不直发图文卡片；切回直发模式后此设置仍保留'
+            : '为 24 小时内的焦点战单独发一张带图卡片'),
         ),
       ),
     ),

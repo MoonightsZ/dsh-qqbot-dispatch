@@ -12,6 +12,7 @@
  * @module dsh-qqbot-dispatch/liquipedia
  */
 import { randomUUID } from 'node:crypto'
+import { composeCs2ServiceTurnPrompt } from './template.js'
 
 const API = 'https://liquipedia.net/counterstrike/api.php'
 const USER_AGENT = 'dsh-qqbot-dispatch/0.1 (DSH QQ bot plugin; +https://github.com/deepseek-ai/dsh)'
@@ -169,6 +170,7 @@ function composeSections(matches, tiers) {
       const tierLabel = group.tier === undefined || group.tier === 'M' ? '' : ` · 🏆 ${group.tier} 级`
       const lines = [`# ${group.title}`, '', `共 ${group.matches.length} 场${tierLabel}`, '']
       const text = [`【CS2 赛事提醒】${group.title}`]
+      const matchupLines = []
       for (const match of group.matches) {
         const when = formatDayTime(match.timestamp)
         const stage = String(match.tournament).includes('#')
@@ -177,12 +179,19 @@ function composeSections(matches, tiers) {
         const bo = match.bestOf === null ? '' : `Bo${match.bestOf}`
         const meta = [bo, stage].filter((part) => part !== '')
         const metaLabel = meta.length === 0 ? '　' : `　${meta.join(' · ')} · `
-        lines.push(`- 🕒 **${when.day} ${when.time}**${metaLabel}**${match.teamA}**　⚔　**${match.teamB}**`)
+        const matchup = `- 🕒 **${when.day} ${when.time}**${metaLabel}**${match.teamA}**　⚔　**${match.teamB}**`
+        lines.push(matchup)
+        matchupLines.push(matchup)
         text.push(`· ${when.day} ${when.time}${meta.length === 0 ? '' : ` ${meta.join(' · ')}`} ${match.teamA}　⚔　${match.teamB}`)
       }
       lines.push('', '---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0')
       text.push('数据来源：Liquipedia · CC BY-SA 3.0')
-      return { title: group.title, markdown: lines.join('\n'), text: text.join('\n'), matches: group.matches }
+      const page = group.matches[0]?.tournamentPage ?? ''
+      return {
+        title: group.title, markdown: lines.join('\n'), text: text.join('\n'), matches: group.matches,
+        matchupsMarkdown: matchupLines.join('\n'), tier: group.tier,
+        sourceUrl: page === '' ? 'https://liquipedia.net/counterstrike' : `https://liquipedia.net/counterstrike/${page}`,
+      }
     })
 }
 
@@ -239,6 +248,7 @@ function pruneSeen(feature) {
  */
 export function createLiquipediaProvider(options = {}) {
   const deliver = options.deliver
+  const serviceTurn = options.serviceTurn
   const readMatches = options.loadMatches ?? loadMatches
   return async ({ feature, target, ctx, now, forceResend = false }) => {
     const sourceId = feature.source?.id ?? 'none'
@@ -274,12 +284,23 @@ export function createLiquipediaProvider(options = {}) {
     const sections = composeSections(fresh, tiers)
     const focus = pickFocus(fresh, watched, now())
     const card = feature.focusCard === false ? undefined : composeCard(focus, tiers)
+    const markSeen = (section) => { for (const match of section.matches) feature.seen[match.id] = checkedAt }
     let channel = 'session'
-    if (typeof deliver === 'function') {
+    if (feature.deliveryMode === 'service-turn') {
+      if (typeof serviceTurn?.dispatch !== 'function') throw new Error('服务回合投递不可用')
+      for (const section of sections) {
+        const sectionFocus = pickFocus(section.matches, watched, now()) ?? section.matches[0]
+        const text = composeCs2ServiceTurnPrompt(section, feature.serviceTemplate, sectionFocus)
+        await serviceTurn.dispatch({ sessionId: target.sessionId, text })
+        markSeen(section)
+      }
+      channel = 'service-turn'
+    } else if (typeof deliver === 'function') {
       for (const section of sections) {
         const sectionCard = focus !== undefined && card !== undefined && section.matches.includes(focus) ? card : undefined
         const outcome = await deliver({ target, text: section.text, markdown: section.markdown, card: sectionCard, ctx })
         if (typeof outcome?.channel === 'string') channel = outcome.channel
+        markSeen(section)
       }
     } else {
       for (const section of sections) {
@@ -289,10 +310,10 @@ export function createLiquipediaProvider(options = {}) {
           mode: 'queue',
           content: [{ type: 'text', text: section.text }],
         }, new AbortController().signal)
+        markSeen(section)
       }
     }
 
-    for (const match of fresh) feature.seen[match.id] = checkedAt
     return { matched: selected.length, sent: fresh.length, channel }
   }
 }

@@ -111,3 +111,44 @@ test('CS2 立即发送先保存当前配置再请求重发', async () => {
   assert.deepEqual(calls.map((call) => call.path), ['/features', '/features/run'])
   assert.deepEqual(calls[1].body, { id: 'cs2-matches', forceResend: true })
 })
+
+test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', async () => {
+  const submitted = []
+  let finished
+  const done = new Promise((resolve) => { finished = resolve })
+  const template = '# {{tournament}}\n## 对局\n{{matchups}}\n## 焦点分析\n{{focusAnalysis}}\n数据来源：[Liquipedia]({{sourceUrl}})'
+  const FeatureCard = createFeatureCard({
+    React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (_path, body) => {
+      submitted.push(body)
+      return { features: [{ id: 'cs2-matches', enabled: body.enabled, focusCard: body.focusCard }] }
+    },
+  })
+  const view = FeatureCard({
+    feature: {
+      id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
+      deliveryMode: 'service-turn', serviceTemplate: template,
+      values: { teams: [], tiers: [] }, fields: [], intervalMinutes: 60,
+      scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: true,
+      credential: { configured: false, writable: false }, lastRunAt: 0,
+    },
+    sessions: [{ sessionId: 'session-1', scope: 'group', title: '赛事群' }], open: true,
+    onToggle: () => {}, onSaved: finished, onRun: () => {}, onNotice: () => {},
+  })
+  const nodes = []
+  const visit = (node) => {
+    if (Array.isArray(node)) { node.forEach(visit); return }
+    if (node === null || typeof node !== 'object') return
+    nodes.push(node)
+    node.children?.forEach(visit)
+  }
+  visit(view)
+  assert.match(JSON.stringify(view), /服务回合生成/)
+  assert.match(JSON.stringify(view), /恢复默认模板/)
+  assert.equal(nodes.find((node) => node.type === 'textarea')?.props.value, template)
+  nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
+  await done
+  assert.equal(submitted[0].deliveryMode, 'service-turn')
+  assert.equal(submitted[0].serviceTemplate, template)
+})

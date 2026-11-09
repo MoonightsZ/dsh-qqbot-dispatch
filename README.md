@@ -42,6 +42,25 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 CS2 的 Cron 配置使用多个输入框，每条规则独立保存为数组元素。页面会把规则解释为具体执行时间，并显示按设定时区计算的下一次计划执行时间；修改后需保存才会更新该时间。兼容读取旧版用 `;` 分隔的字符串，保存时转为数组。支持五段格式「分 时 日 月 周」，以及 `*`、`*/步长`、数字列表和范围；同时填写日期与星期时，两个条件必须同时满足。
 
+CS2 的“通知投递方式”可选“直发优先”（默认）或“服务回合生成”。后者按赛事提交服务回合，让 Agent 依据赛事数据和已有会话上下文填充可编辑的 Markdown 模板；不会直发图文卡片，也不会让 Agent 自行联网。默认模板按赛事、对局、焦点分析和 Liquipedia 来源排列：
+
+```md
+# {{tournament}}
+
+{{tier}}
+
+## 对局
+{{matchups}}
+
+## 焦点分析
+{{focusAnalysis}}
+
+---
+数据来源：[Liquipedia]({{sourceUrl}}) · CC BY-SA 3.0
+```
+
+模板必须保留 `{{matchups}}`、`{{focusAnalysis}}`、`{{sourceUrl}}` 和 Liquipedia 来源标注。插件填入赛事、对局与来源信息；Agent 仅生成焦点分析，不应编造未提供的战绩、阵容或胜率。服务回合成功提交后仍需等待上游向 QQ 推送，页面不会将提交视为已送达。
+
 ## 資料與限制
 
 - 功能狀態：`~/.dsh-qqbot/dispatch-features.json`；群名快取：`~/.dsh-qqbot/group-names.json`；群可用狀態：`~/.dsh-qqbot/group-health.json`。

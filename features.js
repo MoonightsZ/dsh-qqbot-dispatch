@@ -21,6 +21,7 @@ import { dirname, resolve } from 'node:path'
 import { cronMatches, cronRules, describeCron, nextCronTime, parseCronList } from './cron.js'
 import { definition as cs2Matches } from './modules/cs2-matches/definition.js'
 import { definition as casualChat } from './modules/casual-chat/definition.js'
+import { DEFAULT_CS2_SERVICE_TEMPLATE, validateCs2ServiceTemplate } from './modules/cs2-matches/template.js'
 export { cronMatches, parseCronList } from './cron.js'
 
 /** State document shared by every feature toggle. */
@@ -76,6 +77,7 @@ function defaultState(featureId) {
         cron: entry.defaults?.cron ?? [],
         timeZone: 'Asia/Shanghai',
         focusCard: true,
+        ...(featureId === 'cs2-matches' ? { deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE } : {}),
         values: defaultValues(descriptor(featureId)),
         lastRunAt: 0,
         lastResult: null,
@@ -154,6 +156,10 @@ export function configFromInput(entry, input) {
     source: { id: sourceId, baseUrl },
     intervalMinutes,
     values,
+    ...(entry.id === 'cs2-matches' ? {
+      deliveryMode: source.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
+      serviceTemplate: validateCs2ServiceTemplate(source.serviceTemplate),
+    } : {}),
   }
 }
 
@@ -182,6 +188,10 @@ function publicFeature(entry, feature, statePath, credential) {
     cronDescription: feature.scheduleMode === 'cron' ? describeCron(feature.cron ?? '') : null,
     nextRunAt: nextRunAt(feature),
     focusCard: feature.focusCard !== false,
+    ...(entry.id === 'cs2-matches' ? {
+      deliveryMode: feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
+      serviceTemplate: feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE,
+    } : {}),
     values: feature.values ?? {},
     lastRunAt: feature.lastRunAt ?? 0,
     lastResult: feature.lastResult ?? null,
