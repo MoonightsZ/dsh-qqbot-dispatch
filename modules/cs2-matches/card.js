@@ -1,4 +1,5 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
+import { sessionTargetOptions } from '../../client/session-options.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
   const { useState } = React
@@ -127,7 +128,7 @@ function featureStatus(feature) {
   }
 }
 
-function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNotice }) {
+function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
   const values = feature.values ?? {}
   const [enabled, setEnabled] = useState(feature.enabled === true)
   const [teams, setTeams] = useState(Array.isArray(values.teams) ? values.teams : [])
@@ -178,6 +179,7 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
   const save = async (nextEnabled, overrides) => {
     setBusy(true)
     try {
+      if (nextEnabled !== false && sessionTargetOptions(sessions, sessionId).invalidSelected) throw new Error('目标会话已失效，请重新选择')
       if (scheduleMode === 'cron' && describeCron(cronEntries) === null) throw new Error('Cron 规则无效')
       const next = await postJson(FEATURES_PATH, payload(nextEnabled, overrides))
       setApiKey('')
@@ -198,6 +200,7 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
   const run = async () => {
     setBusy(true)
     try {
+      if (sessionTargetOptions(sessions, feature.target?.sessionId ?? '').invalidSelected) throw new Error('已保存的目标会话已失效，请重新选择并保存')
       const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
       if (result?.error) onNotice({ kind: 'error', text: `${feature.label} 检查失败：${result.error}` })
       else if (result?.skipped) onNotice({ kind: 'ok', text: `${feature.label} 未开启，未执行` })
@@ -214,6 +217,7 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
   const cronDescription = describeCron(cronEntries)
   const savedCron = JSON.stringify(splitCronRules(feature.cron)) === JSON.stringify(cronEntries.map((entry) => entry.trim()).filter(Boolean))
   const tierOptions = feature.fields?.find((field) => field.kind === 'options')?.options ?? []
+  const targetOptions = sessionTargetOptions(sessions, sessionId)
 
   const collapse = (event) => {
     event?.stopPropagation?.()
@@ -331,17 +335,17 @@ function FeatureCard({ feature, sessions, open, onToggle, onSaved, onRun, onNoti
       ),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '目标会话'),
-        h('select', {
-          style: styles.select,
-          value: sessionId,
-          onChange: (event) => setSessionId(event.target.value),
-        },
-        h('option', { value: '' }, '选择会话…'),
-        ...sessions.map((session) => h('option', { key: session.sessionId, value: session.sessionId },
-          `${session.title ?? '(无标题)'} · ${session.sessionId.slice(0, 8)}`)),
-        sessionId !== '' && !sessions.some((session) => session.sessionId === sessionId)
-          ? h('option', { value: sessionId }, `(不在列表中) ${sessionId.slice(0, 8)}`)
-          : null),
+        h('div', { style: { display: 'flex', gap: 6 } },
+          h('select', {
+            style: { ...styles.select, flex: 1, minWidth: 0 },
+            value: sessionId,
+            onChange: (event) => setSessionId(event.target.value),
+            onFocus: () => { void onRefreshSessions?.() },
+          },
+          h('option', { value: '' }, '选择会话…'),
+          ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
+          h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项')),
+        targetOptions.invalidSelected ? h('span', { style: styles.warnText }, '目标会话已失效，请重新选择并保存。') : null,
       ),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '检查频率'),

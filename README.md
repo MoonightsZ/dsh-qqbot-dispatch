@@ -34,7 +34,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 `scope` 可為 `group` 或 `c2c`；`mode` 可為 `queue`（排隊）或 `steer`（插入進行中的回合），預設為 `queue`。工具接受任務後即返回，不等待目標回合完成。`qqbot_sessions` 可列出 prefs 中已記錄的 peer 對應，或傳入 `scope` 與 `peerId` 解析單一目標。
 
-側欄「會話」頁顯示會話標題、活躍狀態與 peer 對應；可查詢群資訊、綁定 openid 並刷新群名。「功能」頁可設定 CS2 賽事通知的資料源、隊伍、賽事等級、目標會話及間隔／Cron，並立即檢查。
+側欄「會話」頁以 QQ Bot 當前的 peer 映射顯示會話標題與活躍狀態。「刷新會話」只讀取本地資料；「同步群名」向 QQ 平台查詢群資訊並更新會話標題。頁面可見期間每 20 秒更新會話，下拉框獲得焦點時也會重讀選項。「功能」頁可設定 CS2 賽事通知的資料源、隊伍、賽事等級、目標會話及間隔／Cron，並立即檢查。
 
 「偶尔闲聊」是与 CS2 赛事通知平级的独立模组，默认关闭。开启后每天 19:00（默认 `Asia/Shanghai`）检查一次，默认有 30% 概率发起；安静时段为 22:00–09:00，距上次发送至少 3 天，滚动 7 天最多发送 2 次。目标会话最近 6 小时有活动时会跳过。可修改检查时间、概率、冷却天数、安静时段和话题提示；「立即发起」会先保存当前设置，再跳过自动触发限制。生成开场白的任务通过插件服务回合提交，QQ 实际送达仍受平台限制。
 
@@ -44,7 +44,7 @@ CS2 的 Cron 配置使用多个输入框，每条规则独立保存为数组元�
 
 - 功能狀態：`~/.dsh-qqbot/dispatch-features.json`；群名快取：`~/.dsh-qqbot/group-names.json`。
 - API Key 存入宿主憑證服務；QQ Bot 的 AppID／AppSecret 從 profile 的 `im-qqbot` 配置讀取。
-- qqbot 不會持久化所有群聊／私聊 openid；首次查詢群資訊或從 prefs 取得對應後，才能顯示相關群名。
+- 群聊／私聊目標以 QQ Bot 的 `model-prefs.json` 當前映射為準；群名快取只作展示資訊。不存在或已歸檔的會話不會出現在目標下拉框中。
 - `qqbot_dispatch` 提交的是外部回合，QQ 回覆是否主動推送受上游 `proactiveDelivery.externalTurns` 設定控制。
 - 賽事通知優先直發 QQ；無直發路徑或直發失敗時，插件會恢復目標 Agent 並提交來源為 `plugin:dsh-qqbot-dispatch` 的服務回合。這類回合不受 `externalTurns` 限制，但實際送達仍受 QQ 平台限制。
 - 服務回合只接受上游 `model-prefs.json` 已記錄的 QQ 會話映射；未記錄的派生 session ID 會報錯，不會假定它已對應到 QQ 對象。

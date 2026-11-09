@@ -47,8 +47,12 @@ export function createSessionResolver({ appId, prefsPath = resolve(homedir(), '.
     const rows = []
     for (const [key, sessionId] of Object.entries(readPrefs(prefsPath).sessionIds ?? {})) {
       if (!key.startsWith(prefix) || typeof sessionId !== 'string' || sessionId === '') continue
-      const [scope, peerId] = key.slice(prefix.length).split(':')
-      if (scope === undefined || peerId === undefined) continue
+      const suffix = key.slice(prefix.length)
+      const separator = suffix.indexOf(':')
+      if (separator < 0) continue
+      const scope = suffix.slice(0, separator)
+      const peerId = suffix.slice(separator + 1)
+      if (!SCOPES.includes(scope) || peerId === '') continue
       rows.push({ sessionKey: key, scope, peerId, sessionId, resolvedFrom: 'prefs' })
     }
     return rows

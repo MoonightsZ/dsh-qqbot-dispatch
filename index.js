@@ -21,7 +21,7 @@ export function apply(ctx, config = {}) {
   const defaultMode = config.defaultMode ?? 'queue'
   const features = createFeatureRuntime({ ctx })
   const serviceTurn = createServiceTurnDispatcher(ctx, { resolver, createUserMessage })
-  const deliver = createFeatureDelivery(groupNames, { qqbotApi, loadOptionalPatches, serviceTurn })
+  const deliver = createFeatureDelivery(groupNames, { resolver, qqbotApi, loadOptionalPatches, serviceTurn })
   features.registerProvider('cs2-matches', createLiquipediaProvider({ deliver }))
   features.registerProvider('casual-chat', createChatProvider({ serviceTurn }))
   ctx.effect(() => features.start(), 'qqbot-dispatch.features')

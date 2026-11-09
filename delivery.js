@@ -4,14 +4,13 @@ function describeFailure(error) {
   return code === undefined ? message : `${code}: ${message}`
 }
 
-export function createFeatureDelivery({ readGroupNames }, { qqbotApi, loadOptionalPatches, serviceTurn }) {
+export function createFeatureDelivery(_groupNames, { resolver, qqbotApi, loadOptionalPatches, serviceTurn }) {
   /**
    * Deliver one feature message: straight to the QQ group when its openid is
    * known, otherwise as a plugin service turn in the target Session.
    */
   async function deliverFeatureMessage({ target, text, markdown, card }) {
-    const names = readGroupNames()
-    const openid = Object.keys(names).find((key) => names[key]?.sessionId === target.sessionId)
+    const openid = resolver?.knownPeers().find((peer) => peer.scope === 'group' && peer.sessionId === target.sessionId)?.peerId
     if (openid !== undefined) {
       const credentials = await qqbotApi.readQqbotCredentials(loadOptionalPatches)
       if (credentials !== undefined) {

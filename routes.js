@@ -1,4 +1,4 @@
-import { deriveSessionId, readPrefs, sessionKey } from './session-resolver.js'
+import { readPrefs, sessionKey } from './session-resolver.js'
 
 function describeFailure(error) {
   const code = error?.code ?? error?.name
@@ -19,6 +19,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
     const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
     const GROUP_CACHE_MS = 10 * 60 * 1000
     const groupCache = new Map()
+    const titleCache = new Map()
 
     const sendJson = (res, status, body) => {
       res.writeHead(status, {
@@ -77,15 +78,26 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
      * One Session's title, read without activating its Agent. The list projection column is
      * often empty for a cold Session, so this asks per Session.
      */
-    async function sessionPreview(controller, sessionId) {
+    async function sessionPreview(controller, sessionId, fresh = false) {
+      const cached = titleCache.get(sessionId)
+      if (!fresh && cached !== undefined && Date.now() - cached.at < 60_000) return cached.preview
+      const abort = new AbortController()
+      let timer
       try {
-        const value = await controller.projections({ sessionId }, new AbortController().signal)
+        const value = await Promise.race([
+          controller.projections({ sessionId }, abort.signal),
+          new Promise((resolve) => { timer = setTimeout(() => { abort.abort(); resolve(null) }, 5000) }),
+        ])
         const title = value?.values?.title
-        if (typeof title === 'string' && title !== '') return { title }
-        if (typeof title?.val === 'string' && title.val !== '') return { title: title.val }
-        return {}
+        const preview = typeof title === 'string' && title !== ''
+          ? { title }
+          : typeof title?.val === 'string' && title.val !== '' ? { title: title.val } : {}
+        if (value !== null) titleCache.set(sessionId, { at: Date.now(), preview })
+        return preview
       } catch {
         return {}
+      } finally {
+        clearTimeout(timer)
       }
     }
     /**
@@ -109,39 +121,47 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
         abort.abort()
       }
     }
-    /** QQ Bot Sessions from the store; current qqbot ids may start with `session-`. */
-    async function listQqbotSessions(archived) {
+    /** Join current QQ Bot peer mappings with Sessions in the host store. */
+    async function listQqbotSessions(archived, peers) {
       const controller = ctx.get('sessionController')
       if (controller?.list === undefined) return []
       const value = await controller.list({}, new AbortController().signal)
       const items = Array.isArray(value) ? value : Array.isArray(value?.items) ? value.items : []
       const live = liveSessionIds()
-      const knownIds = new Set(knownPeers().map((peer) => peer.sessionId))
-      const cwd = process.cwd()
-      const rows = []
-      for (const item of items ?? []) {
+      const peerBySession = new Map(peers.map((peer) => [peer.sessionId, peer]))
+      const candidates = items.filter((item) => {
         const sessionId = String(item.sessionId)
-        if (sessionId.startsWith('session-') && !knownIds.has(sessionId)) continue
-        if (item.parentSessionId !== undefined || item.origin === 'subagent') continue
-        if (item.cwd !== undefined && item.cwd !== cwd) continue
-        if (archived.has(sessionId)) continue
-        const preview = await sessionPreview(controller, sessionId)
-        rows.push({
-          sessionId,
-          ...(preview.title === undefined ? {} : { title: preview.title }),
-          hasSession: live.has(sessionId),
-          updatedAt: item.updatedAt,
-        })
+        return peerBySession.has(sessionId)
+          && item.parentSessionId === undefined
+          && item.origin !== 'subagent'
+          && !archived.has(sessionId)
+      })
+      const rows = []
+      for (let offset = 0; offset < candidates.length; offset += 6) {
+        rows.push(...await Promise.all(candidates.slice(offset, offset + 6).map(async (item) => {
+          const sessionId = String(item.sessionId)
+          const peer = peerBySession.get(sessionId)
+          const preview = typeof item.title === 'string' && item.title !== ''
+            ? { title: item.title }
+            : await sessionPreview(controller, sessionId)
+          return {
+            sessionId,
+            ...(preview.title === undefined ? {} : { title: preview.title }),
+            hasSession: live.has(sessionId),
+            updatedAt: item.updatedAt,
+            scope: peer.scope,
+            peerId: peer.peerId,
+            resolvedFrom: peer.resolvedFrom,
+          }
+        })))
       }
       return rows
     }
 
     /**
      * Pull each known group's name from the QQ platform and rename its Session
-     * title to that name. Covers every group this plugin can name: peers learned
-     * from the QQ API (`group-names.json`) plus peers qqbot recorded in its
-     * per-peer prefs file. A group whose title already matches is not renamed
-     * again, so repeated refreshes write nothing.
+     * title to that name. The current qqbot peer mapping determines the target;
+     * cached names never decide which Session belongs to a group.
      */
     async function refreshSessionTitles() {
       const credentials = await qqbotApi.readQqbotCredentials(loadOptionalPatches)
@@ -150,16 +170,9 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
       }
       const controller = ctx.get('sessionController')
       const learned = readGroupNames()
-      const targets = new Map()
-      for (const [openid, entry] of Object.entries(learned)) {
-        if (typeof entry?.sessionId === 'string' && entry.sessionId !== '') {
-          targets.set(openid, { openid, sessionId: entry.sessionId })
-        }
-      }
-      for (const peer of knownPeers()) {
-        if (peer.scope !== 'group' || targets.has(peer.peerId)) continue
-        targets.set(peer.peerId, { openid: peer.peerId, sessionId: peer.sessionId })
-      }
+      const targets = knownPeers()
+        .filter((peer) => peer.scope === 'group')
+        .map((peer) => ({ openid: peer.peerId, sessionId: peer.sessionId }))
       const entries = []
       let updated = 0
       let skipped = 0
@@ -169,7 +182,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
           const info = await qqbotApi.groupInfo(target.openid, credentials)
           const name = typeof info?.group_name === 'string' ? info.group_name.trim() : ''
           if (name === '') throw new Error('接口没有返回 group_name')
-          const preview = await sessionPreview(controller, target.sessionId)
+          const preview = await sessionPreview(controller, target.sessionId, true)
           if (preview.title === name) {
             skipped += 1
             entries.push({ openid: target.openid, sessionId: target.sessionId, name, status: 'unchanged' })
@@ -178,6 +191,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
             updated += 1
             entries.push({ openid: target.openid, sessionId: target.sessionId, name, status: 'renamed' })
           }
+          titleCache.set(target.sessionId, { at: Date.now(), preview: { title: name } })
           learned[target.openid] = {
             sessionId: target.sessionId,
             name,
@@ -203,39 +217,31 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
           try {
             const appId = resolvedAppId()
             const live = liveSessionIds()
+            const peers = knownPeers()
             const archived = await archivedSessionIds()
             let sessions = []
             let warning
             try {
-              sessions = await listQqbotSessions(archived)
+              sessions = await listQqbotSessions(archived, peers)
             } catch (error) {
               warning = describeFailure(error)
             }
             const groupNames = readGroupNames()
-            const nameBySession = new Map(
-              Object.entries(groupNames)
-                .filter(([, entry]) => entry !== null && typeof entry === 'object' && typeof entry.sessionId === 'string')
-                .map(([openid, entry]) => [entry.sessionId, { ...entry, openid }]),
-            )
             sessions = sessions.map((row) => {
-              const known = nameBySession.get(row.sessionId)
-              if (known === undefined) return row
+              if (row.scope !== 'group') return row
+              const known = groupNames[row.peerId]
+              if (known === undefined) return { ...row, groupOpenid: row.peerId }
               return {
                 ...row,
                 groupName: known.name,
                 groupMemberNum: known.memberNum,
                 groupClassText: known.classText,
-                groupOpenid: known.openid,
+                groupOpenid: row.peerId,
               }
             })
             const byId = new Map(sessions.map((row) => [row.sessionId, row]))
-            const entries = knownPeers().filter((entry) => !archived.has(entry.sessionId)).map((entry) => {
+            const entries = peers.filter((entry) => !archived.has(entry.sessionId)).map((entry) => {
               const row = byId.get(entry.sessionId)
-              if (row !== undefined && row.peerId === undefined) {
-                row.scope = entry.scope
-                row.peerId = entry.peerId
-                row.resolvedFrom = 'prefs'
-              }
               return { ...entry, hasSession: live.has(entry.sessionId), exists: row !== undefined }
             })
             sendJson(res, 200, {
@@ -317,12 +323,16 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
             }
             const key = sessionKey(resolvedAppId(), 'group', openid)
             const prefsId = readPrefs(prefsPath).sessionIds?.[key]
-            // A caller that already knows which Session this group talks to
-            // (the sidebar row being bound) overrides the derived identity.
             const askedSessionId = (url.searchParams.get('sessionId') ?? '').trim()
-            const targetSessionId = askedSessionId !== ''
-              ? askedSessionId
-              : typeof prefsId === 'string' && prefsId !== '' ? prefsId : deriveSessionId(key)
+            if (typeof prefsId !== 'string' || prefsId === '') {
+              sendJson(res, 404, { error: '上游尚未记录这个群的会话' })
+              return
+            }
+            if (askedSessionId !== '' && askedSessionId !== prefsId) {
+              sendJson(res, 409, { error: '群的会话映射已变化，请刷新会话列表' })
+              return
+            }
+            const targetSessionId = prefsId
             const cached = groupCache.get(openid)
             const fresh = url.searchParams.get('fresh') === '1'
             let info = !fresh && cached !== undefined && Date.now() - cached.at < GROUP_CACHE_MS ? cached.info : undefined
@@ -353,10 +363,11 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, features, de
             if (groupName !== '') {
               try {
                 const controller = ctx.get('sessionController')
-                const preview = await sessionPreview(controller, targetSessionId)
+                const preview = await sessionPreview(controller, targetSessionId, true)
                 if (preview.title !== groupName) {
                   await controller.rename({ sessionId: targetSessionId, title: groupName })
                 }
+                titleCache.set(targetSessionId, { at: Date.now(), preview: { title: groupName } })
               } catch {
                 /* the lookup still succeeded; the title is best effort */
               }

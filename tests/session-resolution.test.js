@@ -30,3 +30,14 @@ test('拒絕錯誤的 scope 與空 peer ID', () => {
   assert.throws(() => resolver.resolveTarget('channel', 'x'), /scope must be/)
   assert.throws(() => resolver.resolveTarget('group', ' '), /peerId must be/)
 })
+
+test('已知 QQ peer 只接受群聊與私聊映射', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qqbot-dispatch-scopes-'))
+  const prefsPath = join(dir, 'model-prefs.json')
+  writeFileSync(prefsPath, JSON.stringify({ sessionIds: {
+    'qqbot:app-123:group:group-456': 'session-group',
+    'qqbot:app-123:channel:other': 'session-other',
+    'qqbot:app-123:group:': 'session-empty',
+  } }), 'utf8')
+  assert.deepEqual(createSessionResolver({ appId, prefsPath }).knownPeers().map((peer) => peer.sessionId), ['session-group'])
+})

@@ -26,26 +26,32 @@ function DispatchSessionsPage() {
   const [tab, setTab] = useState('sessions')
   const [openFeatureId, setOpenFeatureId] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [sessionLoading, setSessionLoading] = useState(false)
   const [rowBusy, setRowBusy] = useState('')
-  const [binding, setBinding] = useState(null)
   const autoOpened = useRef(false)
+  const sessionRequestId = useRef(0)
+
+  const refreshSessions = useCallback(async (showLoading = false) => {
+    const requestId = ++sessionRequestId.current
+    if (showLoading) setSessionLoading(true)
+    try {
+      const next = await readJson(SESSIONS_PATH)
+      if (requestId === sessionRequestId.current) {
+        setSnapshot((previous) => next.warning && previous ? { ...next, sessions: previous.sessions } : next)
+        setError('')
+      }
+    } catch (failure) {
+      if (requestId === sessionRequestId.current) setError(String(failure?.message ?? failure))
+    } finally {
+      if (showLoading) setSessionLoading(false)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
-    setError('')
-    try {
-      const [sessions, featureData] = await Promise.all([
-        readJson(SESSIONS_PATH),
-        readJson(FEATURES_PATH).catch(() => null),
-      ])
-      setSnapshot(sessions)
-      if (featureData !== null) setFeatures(featureData)
-    } catch (failure) {
-      setError(String(failure?.message ?? failure))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+    await Promise.all([refreshSessions(), readJson(FEATURES_PATH).then(setFeatures).catch(() => {})])
+    setLoading(false)
+  }, [refreshSessions])
 
   const refreshFeatures = useCallback(async () => {
     try {
@@ -63,7 +69,7 @@ function DispatchSessionsPage() {
     setRefreshing(true)
     try {
       const body = await postJson(TITLES_PATH, {})
-      await load()
+      await refreshSessions()
       const updated = body?.updated ?? 0
       const skipped = body?.skipped ?? 0
       const failed = body?.failed ?? 0
@@ -78,7 +84,7 @@ function DispatchSessionsPage() {
     } finally {
       setRefreshing(false)
     }
-  }, [load])
+  }, [refreshSessions])
 
   /**
    * 单行「刷新群名」：走的就是让某一行显示成「群名 · 11 人」的那条路——
@@ -89,7 +95,7 @@ function DispatchSessionsPage() {
     setRowBusy(row.sessionId)
     try {
       const body = await readJson(`${GROUP_INFO_PATH}?openid=${encodeURIComponent(row.groupOpenid)}&fresh=1&sessionId=${encodeURIComponent(row.sessionId)}`)
-      await load()
+      await refreshSessions()
       const name = body?.info?.group_name ?? row.groupName ?? ''
       const num = body?.info?.group_member_num
       setNotice({ kind: 'ok', text: `已同步：${name}${typeof num === 'number' && num > 0 ? ` · ${num} 人` : ''}` })
@@ -98,34 +104,26 @@ function DispatchSessionsPage() {
     } finally {
       setRowBusy('')
     }
-  }, [load])
-
-  /** 绑定群：给还没有 openid 的会话补一次，成功后这一行就跟别的一样有群名和人数。 */
-  const submitBinding = useCallback(async () => {
-    const sessionId = binding?.sessionId
-    const openid = (binding?.value ?? '').trim()
-    if (typeof sessionId !== 'string') return
-    if (!/^[0-9A-Za-z_-]{8,64}$/.test(openid)) {
-      setNotice({ kind: 'error', text: 'group_openid 看起来不对：应为 8~64 位字母/数字' })
-      return
-    }
-    setRowBusy(sessionId)
-    try {
-      const body = await readJson(`${GROUP_INFO_PATH}?openid=${encodeURIComponent(openid)}&fresh=1&sessionId=${encodeURIComponent(sessionId)}`)
-      setBinding(null)
-      await load()
-      const name = body?.info?.group_name ?? ''
-      setNotice({ kind: 'ok', text: `已绑定并同步：${name}` })
-    } catch (failure) {
-      setNotice({ kind: 'error', text: `绑定失败：${String(failure?.message ?? failure)}` })
-    } finally {
-      setRowBusy('')
-    }
-  }, [binding, load])
+  }, [refreshSessions])
 
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshSessions()
+    }
+    const interval = setInterval(refreshWhenVisible, 20_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshWhenVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshWhenVisible)
+      sessionRequestId.current += 1
+    }
+  }, [refreshSessions])
 
   // Open the first feature exactly once; a later collapse must stay collapsed.
   useEffect(() => {
@@ -176,15 +174,21 @@ function DispatchSessionsPage() {
           h('h1', { style: styles.title }, 'QQ 机器人 · 通知助手'),
           h('p', { style: styles.subtitle }, '基于 QQ 机器人管理群聊、私聊会话与赛事通知。'),
         ),
-        h('button', {
+        h('div', { style: { display: 'flex', gap: 8 } }, h('button', {
           type: 'button',
-          style: { ...styles.ghostButton, ...(loading || refreshing ? styles.disabledButton : {}) },
-          disabled: loading || refreshing,
+          style: { ...styles.ghostButton, ...(sessionLoading ? styles.disabledButton : {}) },
+          disabled: sessionLoading,
+          title: '重新读取本地 QQ 会话列表',
+          onClick: () => { void refreshSessions(true) },
+        }, sessionLoading ? '读取中…' : '刷新会话'), h('button', {
+          type: 'button',
+          style: { ...styles.ghostButton, ...(refreshing ? styles.disabledButton : {}) },
+          disabled: refreshing,
           title: '向 QQ 平台取每个群的群名，并把它写成会话标题',
           onClick: () => {
             void refreshTitles()
           },
-        }, refreshing ? '刷新中…' : loading ? '读取中…' : '刷新'),
+        }, refreshing ? '同步中…' : '同步群名')),
       ),
 
       notice === null ? null : h('div', {
@@ -209,7 +213,7 @@ function DispatchSessionsPage() {
           type: 'button',
           className: tab === 'features' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
           style: tab === 'features' ? styles.tabActive : styles.tab,
-          onClick: () => setTab('features'),
+          onClick: () => { setTab('features'); void refreshSessions() },
         }, `功能 ${features?.features.length ?? 0}`),
       ),
 
@@ -220,13 +224,8 @@ function DispatchSessionsPage() {
               loading ? '读取中…' : '还没有 qqbot 创建过的会话，群里或私聊来一条消息后这里会出现。')
             : h('div', { style: styles.panel }, h(SessionTable, {
               rows: sessions,
-              binding,
               rowBusy,
               onRefresh: refreshRow,
-              onBindStart: (sessionId) => setBinding({ sessionId, value: '' }),
-              onBindChange: (value) => setBinding((current) => (current === null ? null : { ...current, value })),
-              onBindSubmit: submitBinding,
-              onBindCancel: () => setBinding(null),
             })),
         ),
         entries.length === 0 ? null : h(Section, { title: '已记录的 peer 映射', meta: `${entries.length} 条` },
@@ -244,6 +243,7 @@ function DispatchSessionsPage() {
               key: feature.id,
               feature,
               sessions,
+              onRefreshSessions: refreshSessions,
               open: openFeatureId === feature.id,
               onToggle: () => setOpenFeatureId(openFeatureId === feature.id ? null : feature.id),
               onSaved: (next) => setFeatures(next),
@@ -255,7 +255,7 @@ function DispatchSessionsPage() {
 
       h('div', { style: styles.footer },
         h('div', null, '活跃 = 进程内有 Agent；休眠 = 进程内没有 Agent。赛事通知可提交服务回合并尝试主动推送到 QQ，实际送达受 QQ 平台限制。'),
-        h('div', null, 'qqbot 不落盘群/私聊 openid，所以会话只按标题和 sessionId 展示；「刷新」会对已知 openid 的群拉一次群信息，并把群名写成会话标题。'),
+        h('div', null, '会话来自 QQ Bot 当前的 peer 映射；刷新会话只读取本地数据，同步群名会请求 QQ 平台并更新会话标题。'),
         snapshot === null ? null : h('div', { style: styles.footerRow },
           h('span', null, `appId ${snapshot.appId}`),
           h('span', null, `mode ${snapshot.defaultMode}`),
