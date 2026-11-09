@@ -1,9 +1,14 @@
 {
-  "name": "dsh-tool-qqbot-dispatch",
+  "name": "dsh-qqbot-dispatch",
   "version": "0.1.0",
   "private": true,
-  "description": "DSH tool and sidebar page: QQ Bot sessions and task dispatch for @tencent-connect/dsh-qqbot",
+  "description": "QQ Bot notification assistant for @tencent-connect/dsh-qqbot",
   "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test",
+    "prepack": "npm run build"
+  },
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
@@ -13,8 +18,15 @@
   },
   "files": [
     "index.js",
+    "session-resolver.js",
+    "tools.js",
+    "routes.js",
+    "delivery.js",
+    "service-turn.js",
+    "modules/",
+    "group-names.js",
     "features.js",
-    "liquipedia.js",
+    "cron.js",
     "qqbot-creds.js",
     "client.js",
     "cordis.patch.yml",
@@ -33,13 +45,17 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.1.0",
-    "@deepseek-ai/dsh-app-boot": ">=0.1.0"
+    "@deepseek-ai/dsh-app-boot": ">=0.1.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0"
   },
   "keywords": [
     "dsh",
     "dsh-plugin",
     "cordis",
     "qqbot"
-  ]
+  ],
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  }
 }

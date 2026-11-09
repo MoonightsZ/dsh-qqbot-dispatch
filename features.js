@@ -1,25 +1,27 @@
 /**
  * Feature toggles for the QQ dispatch page.
  *
- * This is the shell only: every feature declares its own settings fields and a
- * data source, but no provider is registered yet, so enabling a feature and
- * pressing "立即检查" reports that the data source is not wired instead of
- * fetching anything.
+ * Each module declares its own settings fields and provider. This runtime
+ * manages shared state, scheduling, and execution.
  *
  * The data-source block mirrors dsh's model settings: a provider choice, an
  * optional endpoint, and a **write-only** API key that lives in the host
  * credential store under a stable reference — never in this state file.
  *
- * Wire a provider later with `runtime.registerProvider(id, run)`, where `run`
- * receives `{ feature, target, ctx, now }` and returns `{ matched, sent,
+ * Register a provider with `runtime.registerProvider(id, run)`, where `run`
+ * receives `{ feature, target, ctx, now, manual }` and returns `{ matched, sent,
  * error }`. The transport (which API is asked) stays outside this module, so
  * Liquipedia is not assumed anywhere.
  *
- * @module dsh-tool-qqbot-dispatch/features
+ * @module dsh-qqbot-dispatch/features
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
+import { cronMatches, cronRules, describeCron, nextCronTime, parseCronList } from './cron.js'
+import { definition as cs2Matches } from './modules/cs2-matches/definition.js'
+import { definition as casualChat } from './modules/casual-chat/definition.js'
+export { cronMatches, parseCronList } from './cron.js'
 
 /** State document shared by every feature toggle. */
 export const STATE_PATH = resolve(homedir(), '.dsh-qqbot', 'dispatch-features.json')
@@ -41,31 +43,7 @@ export const SOURCES = [
  * Feature catalog. `provider` names the future data source; the shell renders
  * whatever `fields` declares and stores the answers verbatim.
  */
-export const FEATURES = [
-  {
-    id: 'cs2-matches',
-    label: 'CS2 赛事通知',
-    description: '按小时检查关注的队伍与赛事等级，把新比赛下发到指定 QQ 会话。数据源待接入。',
-    provider: null,
-    providerLabel: '未接入',
-    fields: [
-      {
-        key: 'teams',
-        label: '关注队伍',
-        kind: 'list',
-        placeholder: '例如 Spirit, Vitality',
-        hint: '留空表示全部队伍',
-      },
-      {
-        key: 'tiers',
-        label: '关注赛事等级',
-        kind: 'options',
-        options: ['S', 'A', 'B', 'C'],
-        hint: '留空表示全部等级',
-      },
-    ],
-  },
-]
+export const FEATURES = [cs2Matches, casualChat]
 
 function descriptor(id) {
   const found = FEATURES.find((feature) => feature.id === id)
@@ -80,21 +58,22 @@ export function credentialRefFor(featureId) {
 
 function defaultValues(entry) {
   const values = {}
-  for (const field of entry.fields) values[field.key] = []
+  for (const field of entry.fields) values[field.key] = field.default ?? []
   return values
 }
 
 function defaultState(featureId) {
+  const entry = descriptor(featureId)
   return {
     version: 1,
     features: {
       [featureId]: {
         enabled: false,
         target: { sessionId: '' },
-        source: { id: 'custom', baseUrl: '' },
-        intervalMinutes: 60,
-        scheduleMode: 'interval',
-        cron: '',
+        source: entry.defaults?.source ?? { id: 'custom', baseUrl: '' },
+        intervalMinutes: entry.defaults?.intervalMinutes ?? 60,
+        scheduleMode: entry.defaults?.scheduleMode ?? 'interval',
+        cron: entry.defaults?.cron ?? [],
         timeZone: 'Asia/Shanghai',
         focusCard: true,
         values: defaultValues(descriptor(featureId)),
@@ -144,7 +123,7 @@ export function configFromInput(entry, input) {
   const baseUrl = String(sourceInput.baseUrl ?? '').trim().slice(0, 300)
   const intervalMinutes = clamp(Number(source.intervalMinutes ?? 60) || 60, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)
   const scheduleMode = source.scheduleMode === 'cron' ? 'cron' : 'interval'
-  const cron = String(source.cron ?? '').trim().slice(0, 120)
+  const cron = cronRules(source.cron).slice(0, 10).map((rule) => rule.slice(0, 120))
   const timeZone = typeof source.timeZone === 'string' && source.timeZone.trim() !== '' ? source.timeZone.trim().slice(0, 60) : 'Asia/Shanghai'
   const submitted = source.values !== null && typeof source.values === 'object' ? source.values : {}
   const values = {}
@@ -182,12 +161,12 @@ export function configFromInput(entry, input) {
 function publicFeature(entry, feature, statePath, credential) {
   const source = feature.source ?? { id: 'none', baseUrl: '' }
   const provider = source.id === 'none' ? null : source.id
-  const sourceLabel = SOURCES.find((item) => item.id === source.id)?.label ?? '未接入'
+  const sourceLabel = entry.provider === 'builtin' ? '内置' : SOURCES.find((item) => item.id === source.id)?.label ?? '未接入'
   return {
     id: entry.id,
     label: entry.label,
     description: entry.description,
-    provider,
+    provider: entry.provider === 'builtin' ? 'builtin' : provider,
     providerLabel: sourceLabel,
     sources: SOURCES,
     source,
@@ -197,9 +176,10 @@ function publicFeature(entry, feature, statePath, credential) {
     target: feature.target ?? { sessionId: '' },
     intervalMinutes: feature.intervalMinutes ?? 60,
     scheduleMode: feature.scheduleMode === 'cron' ? 'cron' : 'interval',
-    cron: feature.cron ?? '',
+    cron: cronRules(feature.cron),
     timeZone: feature.timeZone ?? 'Asia/Shanghai',
     cronValid: feature.scheduleMode !== 'cron' || parseCronList(feature.cron ?? '') !== undefined,
+    cronDescription: feature.scheduleMode === 'cron' ? describeCron(feature.cron ?? '') : null,
     nextRunAt: nextRunAt(feature),
     focusCard: feature.focusCard !== false,
     values: feature.values ?? {},
@@ -209,128 +189,10 @@ function publicFeature(entry, feature, statePath, credential) {
   }
 }
 
-const WEEKDAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
-
-function parseField(field, min, max) {
-  const values = new Set()
-  for (const part of String(field).split(',')) {
-    const stepMatch = /^\*\/(\d+)$/.exec(part)
-    if (stepMatch !== null) {
-      const step = Number(stepMatch[1])
-      if (!Number.isInteger(step) || step < 1) return undefined
-      for (let value = min; value <= max; value += step) values.add(value)
-      continue
-    }
-    if (part === '*') {
-      for (let value = min; value <= max; value += 1) values.add(value)
-      continue
-    }
-    const rangeMatch = /^(\d+)-(\d+)$/.exec(part)
-    if (rangeMatch !== null) {
-      const from = Number(rangeMatch[1])
-      const to = Number(rangeMatch[2])
-      if (from > to || from < min || to > max) return undefined
-      for (let value = from; value <= to; value += 1) values.add(value)
-      continue
-    }
-    const number = Number(part)
-    if (!Number.isInteger(number) || number < min || number > max) return undefined
-    values.add(number)
-  }
-  return values
-}
-
-/** Parse a 5-field cron (minute hour day month weekday); weekday 7 folds onto Sunday. */
-export function parseCron(expression) {
-  const fields = String(expression ?? '').trim().split(/\s+/)
-  if (fields.length !== 5) return undefined
-  const limits = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]]
-  const sets = fields.map((field, index) => parseField(field, limits[index][0], limits[index][1]))
-  if (sets.some((set) => set === undefined)) return undefined
-  if (sets[4].has(7)) {
-    sets[4].delete(7)
-    sets[4].add(0)
-  }
-  return sets
-}
-
-/** Parse a ';'-separated list of 5-field expressions; any invalid part invalidates the list. */
-export function parseCronList(expression) {
-  const parts = String(expression ?? '').split(';').map((part) => part.trim()).filter((part) => part !== '')
-  if (parts.length === 0) return undefined
-  const list = []
-  for (const part of parts) {
-    const parsed = parseCron(part)
-    if (parsed === undefined) return undefined
-    list.push(parsed)
-  }
-  return list
-}
-
-function cronListMatches(list, date, timeZone) {
-  if (list === undefined) return false
-  return list.some((sets) => cronMatches(sets, date, timeZone))
-}
-
-function zonedParts(date, timeZone) {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      hourCycle: 'h23',
-      minute: '2-digit',
-      hour: '2-digit',
-      day: '2-digit',
-      month: '2-digit',
-      weekday: 'short',
-    }).formatToParts(date)
-    const value = (type) => parts.find((part) => part.type === type)?.value ?? ''
-    return {
-      minute: Number(value('minute')),
-      hour: Number(value('hour')),
-      day: Number(value('day')),
-      month: Number(value('month')),
-      weekday: WEEKDAYS[value('weekday')] ?? 0,
-    }
-  } catch {
-    return undefined
-  }
-}
-
-/** Whether one instant matches the parsed cron in the given zone. */
-export function cronMatches(sets, date, timeZone) {
-  if (sets === undefined) return false
-  const parts = zonedParts(date, timeZone)
-  if (parts === undefined) return false
-  return sets[0].has(parts.minute) && sets[1].has(parts.hour) && sets[2].has(parts.day)
-    && sets[3].has(parts.month) && sets[4].has(parts.weekday)
-}
-
-/** Next matching instant, scanning forward up to 31 days. */
-function nextCronAt(sets, fromMs, timeZone) {
-  const step = 60_000
-  const limit = 31 * 24 * 60
-  let cursor = Math.floor(fromMs / step) * step + step
-  for (let index = 0; index < limit; index += 1) {
-    if (cronMatches(sets, new Date(cursor), timeZone)) return cursor
-    cursor += step
-  }
-  return 0
-}
-
 /** When the next automatic run is due, for display. */
 function nextRunAt(feature) {
   if (feature.scheduleMode === 'cron') {
-    const list = parseCronList(feature.cron ?? '')
-    if (list === undefined) return 0
-    const timeZone = feature.timeZone ?? 'Asia/Shanghai'
-    const step = 60_000
-    const limit = 31 * 24 * 60
-    let cursor = Math.floor(Date.now() / step) * step + step
-    for (let index = 0; index < limit; index += 1) {
-      if (cronListMatches(list, new Date(cursor), timeZone)) return cursor
-      cursor += step
-    }
-    return 0
+    return nextCronTime(feature.cron ?? '', feature.timeZone ?? 'Asia/Shanghai')
   }
   const interval = (feature.intervalMinutes ?? 60) * 60_000
   return Math.max(Date.now(), (feature.lastRunAt ?? 0) + interval)
@@ -346,6 +208,7 @@ export function createFeatureRuntime(options) {
   const statePath = options.statePath ?? STATE_PATH
   const now = options.now ?? (() => Date.now())
   const providers = new Map()
+  const running = new Set()
   let timer = null
   let startup = null
 
@@ -376,9 +239,7 @@ export function createFeatureRuntime(options) {
 
   async function save(id, input) {
     const entry = descriptor(id)
-    const state = read()
-    const feature = state.features[id] ?? defaultState(id).features[id]
-    Object.assign(feature, configFromInput(entry, input))
+    const submitted = configFromInput(entry, input)
 
     const credentials = ctx.get('credentials')
     const ref = credentialRefFor(id)
@@ -388,6 +249,9 @@ export function createFeatureRuntime(options) {
       else if (input?.clearCredential === true) await credentials.unset(ref)
     }
 
+    const state = read()
+    const feature = state.features[id] ?? defaultState(id).features[id]
+    Object.assign(feature, submitted)
     state.features[id] = feature
     writeStateFile(statePath, state)
     return publicFeature(entry, feature, statePath, await credentialStatus(id))
@@ -403,6 +267,7 @@ export function createFeatureRuntime(options) {
     if (!feature.enabled && !manual) {
       return { skipped: true, reason: 'disabled' }
     }
+    if (running.has(id)) return { skipped: true, reason: 'running' }
     const provider = providers.get(id)
     if (provider === undefined) {
       const sourceId = feature.source?.id ?? 'none'
@@ -413,11 +278,12 @@ export function createFeatureRuntime(options) {
       writeStateFile(statePath, state)
       return result
     }
+    running.add(id)
     return Promise.resolve()
       .then(async () => {
         const sessionId = String(feature.target?.sessionId ?? '').trim()
         if (sessionId === '') throw new Error('未选择目标会话')
-        const outcome = await provider({ feature, target: { sessionId }, ctx, now })
+        const outcome = await provider({ feature, target: { sessionId }, ctx, now, manual })
         result.matched = Number(outcome?.matched ?? 0)
         result.sent = Number(outcome?.sent ?? 0)
         if (typeof outcome?.error === 'string') result.error = outcome.error
@@ -430,10 +296,20 @@ export function createFeatureRuntime(options) {
         return result
       })
       .finally(() => {
+        running.delete(id)
         feature.lastRunAt = checkedAt
         feature.lastResult = result
-        state.features[id] = feature
-        writeStateFile(statePath, state)
+        const latest = read()
+        latest.features[id] = {
+          ...(latest.features[id] ?? feature),
+          lastRunAt: checkedAt,
+          lastResult: result,
+          seen: feature.seen,
+          tierCache: feature.tierCache,
+          lastSentAt: feature.lastSentAt,
+          chatSentAt: feature.chatSentAt,
+        }
+        writeStateFile(statePath, latest)
       })
   }
 
@@ -453,7 +329,7 @@ export function createFeatureRuntime(options) {
       if (feature.scheduleMode === 'cron') {
         const list = parseCronList(feature.cron ?? '')
         if (list === undefined) continue
-        if (!cronListMatches(list, new Date(now()), feature.timeZone ?? 'Asia/Shanghai')) continue
+        if (!list.some((sets) => cronMatches(sets, new Date(now()), feature.timeZone ?? 'Asia/Shanghai'))) continue
         if (feature.lastRunAt !== 0 && Math.floor(feature.lastRunAt / 60_000) === Math.floor(now() / 60_000)) continue
       } else {
         const interval = (feature.intervalMinutes ?? 60) * 60_000

@@ -9,7 +9,7 @@
  *   never sends the same match twice;
  * - every message attributes Liquipedia as the source (CC BY-SA 3.0).
  *
- * @module dsh-tool-qqbot-dispatch/liquipedia
+ * @module dsh-qqbot-dispatch/liquipedia
  */
 import { randomUUID } from 'node:crypto'
 

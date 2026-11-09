@@ -6,7 +6,7 @@
  * patch that configures `im-qqbot` is parsed with the host's own patch loader,
  * so the bot keeps one source of truth for its appId/appSecret.
  *
- * @module dsh-tool-qqbot-dispatch/qqbot-creds
+ * @module dsh-qqbot-dispatch/qqbot-creds
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'

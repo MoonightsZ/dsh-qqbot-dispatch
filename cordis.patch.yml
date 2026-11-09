@@ -1,11 +1,11 @@
-# dsh-tool-qqbot-dispatch bundle patch
+# dsh-qqbot-dispatch bundle patch
 #
 # 安装后由 profile 选中该 bundle 时自动加载。插件本身的无 config 行在此插入；
 # 部署相关的 appId / prefsPath / defaultMode 由 profile 的 cordis.patch.yml 以覆盖行给出：
 #
-#   - id: tool-qqbot-dispatch
+#   - id: qqbot-dispatch
 #     config:
 #       appId: '<QQ Bot AppID>'
 - insert:
-    - id: tool-qqbot-dispatch
-      name: 'dsh-tool-qqbot-dispatch'
+    - id: qqbot-dispatch
+      name: 'dsh-qqbot-dispatch'

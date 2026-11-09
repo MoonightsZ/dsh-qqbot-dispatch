@@ -1,0 +1,282 @@
+import React from 'react'
+import { C, MONO, styles } from './theme.js'
+import { createCommon } from './common.js'
+import { createSessionTables } from './tables.js'
+import { createFeatureCard } from '../modules/cs2-matches/card.js'
+import { createChatCard } from '../modules/casual-chat/card.js'
+
+const h = React.createElement
+const { useCallback, useEffect, useRef, useState } = React
+const SESSIONS_PATH = '/qqbot-tool-dispatch/sessions'
+const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
+const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
+const FEATURES_PATH = '/qqbot-tool-dispatch/features'
+const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
+const { readJson, postJson, formatRelative, formatAbsolute, PanelIcon, Switch, StatusPill, Section } = createCommon({ h, C, styles })
+const { SessionTable, PeerTable } = createSessionTables({ h, C, MONO, styles, formatRelative, formatAbsolute, StatusPill })
+const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
+const ChatCard = createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
+
+function DispatchSessionsPage() {
+  const [snapshot, setSnapshot] = useState(null)
+  const [features, setFeatures] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState(null)
+  const [tab, setTab] = useState('sessions')
+  const [openFeatureId, setOpenFeatureId] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [rowBusy, setRowBusy] = useState('')
+  const [binding, setBinding] = useState(null)
+  const autoOpened = useRef(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [sessions, featureData] = await Promise.all([
+        readJson(SESSIONS_PATH),
+        readJson(FEATURES_PATH).catch(() => null),
+      ])
+      setSnapshot(sessions)
+      if (featureData !== null) setFeatures(featureData)
+    } catch (failure) {
+      setError(String(failure?.message ?? failure))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const refreshFeatures = useCallback(async () => {
+    try {
+      setFeatures(await readJson(FEATURES_PATH))
+    } catch {
+      /* keep the last snapshot */
+    }
+  }, [])
+
+  /**
+   * 刷新：先让宿主去 QQ 平台取每个群的群名并改会话标题，再重读列表。
+   * 标题没变的群不会重复写，失败只影响那一个群。
+   */
+  const refreshTitles = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const body = await postJson(TITLES_PATH, {})
+      await load()
+      const updated = body?.updated ?? 0
+      const skipped = body?.skipped ?? 0
+      const failed = body?.failed ?? 0
+      setNotice({
+        kind: failed > 0 ? 'error' : 'ok',
+        text: failed > 0
+          ? `群名刷新完成：更新 ${updated} 个，未变 ${skipped} 个，失败 ${failed} 个`
+          : `群名已同步：更新 ${updated} 个，未变 ${skipped} 个`,
+      })
+    } catch (failure) {
+      setNotice({ kind: 'error', text: `刷新群名失败：${String(failure?.message ?? failure)}` })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [load])
+
+  /**
+   * 单行「刷新群名」：走的就是让某一行显示成「群名 · 11 人」的那条路——
+   * GET /group-info?openid=…&fresh=1&sessionId=…，宿主顺手把群名写进会话标题。
+   */
+  const refreshRow = useCallback(async (row) => {
+    if (row?.groupOpenid === undefined) return
+    setRowBusy(row.sessionId)
+    try {
+      const body = await readJson(`${GROUP_INFO_PATH}?openid=${encodeURIComponent(row.groupOpenid)}&fresh=1&sessionId=${encodeURIComponent(row.sessionId)}`)
+      await load()
+      const name = body?.info?.group_name ?? row.groupName ?? ''
+      const num = body?.info?.group_member_num
+      setNotice({ kind: 'ok', text: `已同步：${name}${typeof num === 'number' && num > 0 ? ` · ${num} 人` : ''}` })
+    } catch (failure) {
+      setNotice({ kind: 'error', text: `同步群信息失败：${String(failure?.message ?? failure)}` })
+    } finally {
+      setRowBusy('')
+    }
+  }, [load])
+
+  /** 绑定群：给还没有 openid 的会话补一次，成功后这一行就跟别的一样有群名和人数。 */
+  const submitBinding = useCallback(async () => {
+    const sessionId = binding?.sessionId
+    const openid = (binding?.value ?? '').trim()
+    if (typeof sessionId !== 'string') return
+    if (!/^[0-9A-Za-z_-]{8,64}$/.test(openid)) {
+      setNotice({ kind: 'error', text: 'group_openid 看起来不对：应为 8~64 位字母/数字' })
+      return
+    }
+    setRowBusy(sessionId)
+    try {
+      const body = await readJson(`${GROUP_INFO_PATH}?openid=${encodeURIComponent(openid)}&fresh=1&sessionId=${encodeURIComponent(sessionId)}`)
+      setBinding(null)
+      await load()
+      const name = body?.info?.group_name ?? ''
+      setNotice({ kind: 'ok', text: `已绑定并同步：${name}` })
+    } catch (failure) {
+      setNotice({ kind: 'error', text: `绑定失败：${String(failure?.message ?? failure)}` })
+    } finally {
+      setRowBusy('')
+    }
+  }, [binding, load])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Open the first feature exactly once; a later collapse must stay collapsed.
+  useEffect(() => {
+    if (autoOpened.current) return
+    const first = features?.features?.[0]
+    if (first === undefined) return
+    autoOpened.current = true
+    setOpenFeatureId((current) => current ?? first.id)
+  }, [features])
+
+  useEffect(() => {
+    if (notice === null) return undefined
+    const timer = setTimeout(() => setNotice(null), 4000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
+  const sessions = snapshot?.sessions ?? []
+  const entries = snapshot?.entries ?? []
+
+  return h('div', { style: styles.page },
+    h('style', null, [
+      '.qqd-row:hover { background: var(--dsw-alias-bg-layer-2); }',
+      '.qqd-row > td { transition: background .12s ease; }',
+      '.qqd-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }',
+      '.qqd-tab:hover { color: var(--dsw-alias-label-primary); }',
+      '.qqd-tab-active:hover { color: var(--dsw-alias-brand-primary); }',
+      '.qqd-slider { position: relative; flex: 1 1 auto; min-width: 120px; }',
+      '.qqd-range { position: relative; height: 26px; }',
+      '.qqd-range::before { content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 2px; border-radius: 2px; background: var(--dsw-alias-border-l2); }',
+      '.qqd-range-fill { position: absolute; top: 12px; height: 2px; border-radius: 2px; background: var(--dsw-alias-brand-primary); }',
+      '.qqd-range input[type="range"] { position: absolute; left: -8px; width: calc(100% + 16px); height: 26px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; pointer-events: none; }',
+      '.qqd-range input[type="range"]:focus { outline: none; }',
+      '.qqd-range input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 35%, transparent); }',
+      '.qqd-range input[type="range"]::-webkit-slider-runnable-track { height: 26px; background: transparent; }',
+      '.qqd-range input[type="range"]::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 16px; height: 16px; margin-top: 5px; border-radius: 50%; background: var(--dsw-alias-brand-primary); border: 2px solid var(--dsw-alias-bg-base); box-shadow: 0 1px 3px rgba(0,0,0,0.35); cursor: grab; }',
+      '.qqd-range input[type="range"]::-moz-range-track { height: 26px; background: transparent; }',
+      '.qqd-range input[type="range"]::-moz-range-thumb { pointer-events: auto; width: 12px; height: 12px; border-radius: 50%; background: var(--dsw-alias-brand-primary); border: 2px solid var(--dsw-alias-bg-base); box-shadow: 0 1px 3px rgba(0,0,0,0.35); cursor: grab; }',
+      '.qqd-ticks { position: relative; height: 14px; margin-top: 2px; font-size: 11px; }',
+      '.qqd-ticks span { position: absolute; transform: translateX(-50%); }',
+      '@keyframes qqd-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }',
+      'summary::-webkit-details-marker { display: none; }',
+      '.qqd-chev { display: inline-block; transition: transform .15s ease; font-size: 10px; }',
+      'details[open] .qqd-chev { transform: rotate(90deg); }',
+    ].join('\n')),
+    h('div', { style: styles.inner },
+      h('div', { style: styles.header },
+        h('div', { style: styles.headerText },
+          h('h1', { style: styles.title }, 'QQ 机器人 · 通知助手'),
+          h('p', { style: styles.subtitle }, '基于 QQ 机器人管理群聊、私聊会话与赛事通知。'),
+        ),
+        h('button', {
+          type: 'button',
+          style: { ...styles.ghostButton, ...(loading || refreshing ? styles.disabledButton : {}) },
+          disabled: loading || refreshing,
+          title: '向 QQ 平台取每个群的群名，并把它写成会话标题',
+          onClick: () => {
+            void refreshTitles()
+          },
+        }, refreshing ? '刷新中…' : loading ? '读取中…' : '刷新'),
+      ),
+
+      notice === null ? null : h('div', {
+        style: { ...styles.toast, ...(notice.kind === 'error' ? styles.toastError : styles.toastOk) },
+        role: 'status',
+        'aria-live': 'polite',
+      },
+      h('span', { style: { flex: '1 1 auto' } }, notice.text),
+      h('button', { type: 'button', style: styles.toastClose, 'aria-label': '关闭提示', onClick: () => setNotice(null) }, '×'),
+      ),
+      error === '' ? null : h('p', { style: styles.errorText }, `加载失败：${error}`),
+      snapshot?.warning === undefined ? null : h('p', { style: styles.warnText }, `读取会话失败：${snapshot.warning}`),
+
+      h('div', { style: styles.tabs },
+        h('button', {
+          type: 'button',
+          className: tab === 'sessions' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
+          style: tab === 'sessions' ? styles.tabActive : styles.tab,
+          onClick: () => setTab('sessions'),
+        }, `会话 ${sessions.length}`),
+        h('button', {
+          type: 'button',
+          className: tab === 'features' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
+          style: tab === 'features' ? styles.tabActive : styles.tab,
+          onClick: () => setTab('features'),
+        }, `功能 ${features?.features.length ?? 0}`),
+      ),
+
+      tab !== 'sessions' ? null : h('div', null,
+        h(Section, { title: '已有 QQ 会话', meta: `${sessions.length} 个` },
+          sessions.length === 0
+            ? h('div', { style: styles.empty },
+              loading ? '读取中…' : '还没有 qqbot 创建过的会话，群里或私聊来一条消息后这里会出现。')
+            : h('div', { style: styles.panel }, h(SessionTable, {
+              rows: sessions,
+              binding,
+              rowBusy,
+              onRefresh: refreshRow,
+              onBindStart: (sessionId) => setBinding({ sessionId, value: '' }),
+              onBindChange: (value) => setBinding((current) => (current === null ? null : { ...current, value })),
+              onBindSubmit: submitBinding,
+              onBindCancel: () => setBinding(null),
+            })),
+        ),
+        entries.length === 0 ? null : h(Section, { title: '已记录的 peer 映射', meta: `${entries.length} 条` },
+          h('div', { style: styles.panel }, h(PeerTable, { rows: entries })),
+        ),
+      ),
+
+      tab !== 'features' ? null : h('div', null,
+        h(Section, { title: '功能', meta: features === null ? '' : `${features.features.length} 项` },
+          h('p', { style: { ...styles.desc, marginTop: 0, marginBottom: 10 } },
+            '各模组独立保存开关与配置。赛事通知使用数据源；偶尔闲聊使用内置服务回合。'),
+          features === null
+            ? h('div', { style: styles.empty }, loading ? '读取中…' : '功能接口不可用（宿主未提供）')
+            : features.features.map((feature) => h(feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
+              key: feature.id,
+              feature,
+              sessions,
+              open: openFeatureId === feature.id,
+              onToggle: () => setOpenFeatureId(openFeatureId === feature.id ? null : feature.id),
+              onSaved: (next) => setFeatures(next),
+              onRun: () => { void refreshFeatures() },
+              onNotice: setNotice,
+            })),
+        ),
+      ),
+
+      h('div', { style: styles.footer },
+        h('div', null, '活跃 = 进程内有 Agent；休眠 = 进程内没有 Agent。赛事通知可提交服务回合并尝试主动推送到 QQ，实际送达受 QQ 平台限制。'),
+        h('div', null, 'qqbot 不落盘群/私聊 openid，所以会话只按标题和 sessionId 展示；「刷新」会对已知 openid 的群拉一次群信息，并把群名写成会话标题。'),
+        snapshot === null ? null : h('div', { style: styles.footerRow },
+          h('span', null, `appId ${snapshot.appId}`),
+          h('span', null, `mode ${snapshot.defaultMode}`),
+          h('span', { style: styles.mono }, snapshot.prefsPath),
+        ),
+      ),
+    ),
+  )
+}
+
+
+export const inject = ['slots']
+export function apply(ctx) {
+  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+    name: 'sidebar.panellist',
+    id: 'qqbot-dispatch',
+    order: 20,
+    label: 'QQ 机器人 · 通知助手',
+  }, PanelIcon))
+  ctx.slots.inject('main', () => ctx.slots.register({
+    name: 'main',
+    key: 'qqbot-dispatch',
+  }, DispatchSessionsPage))
+}

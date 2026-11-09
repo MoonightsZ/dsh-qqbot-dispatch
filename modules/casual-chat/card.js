@@ -1,0 +1,124 @@
+import { cronRules, formatZonedTime } from '../../cron.js'
+
+export function createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
+  const { useState } = React
+
+  function ChatCard({ feature, sessions, open, onToggle, onSaved, onRun, onNotice }) {
+    const values = feature.values ?? {}
+    const [enabled, setEnabled] = useState(feature.enabled === true)
+    const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
+    const [checkTime, setCheckTime] = useState((() => {
+      const [minute, hour] = (cronRules(feature.cron)[0] ?? '0 19 * * *').split(' ')
+      return `${String(hour ?? '19').padStart(2, '0')}:${String(minute ?? '0').padStart(2, '0')}`
+    })())
+    const [chancePercent, setChancePercent] = useState(String(values.chancePercent ?? '30'))
+    const [cooldownDays, setCooldownDays] = useState(String(values.cooldownDays ?? '3'))
+    const [quietStart, setQuietStart] = useState(String(values.quietStart ?? '22'))
+    const [quietEnd, setQuietEnd] = useState(String(values.quietEnd ?? '9'))
+    const [topics, setTopics] = useState(String(values.topics ?? ''))
+    const [busy, setBusy] = useState(false)
+
+    const payload = (nextEnabled) => {
+      const [hour, minute] = checkTime.split(':').map(Number)
+      return {
+        id: feature.id,
+        enabled: nextEnabled ?? enabled,
+        target: { sessionId },
+        source: { id: 'none', baseUrl: '' },
+        scheduleMode: 'cron',
+        cron: [`${minute} ${hour} * * *`],
+        timeZone: feature.timeZone ?? 'Asia/Shanghai',
+        values: { chancePercent, cooldownDays, quietStart, quietEnd, topics },
+      }
+    }
+
+    const persist = async (nextEnabled) => {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(checkTime)) throw new Error('每日检查时间无效')
+      const next = await postJson(FEATURES_PATH, payload(nextEnabled))
+      setEnabled(next.features.find((entry) => entry.id === feature.id)?.enabled === true)
+      onSaved(next)
+      return next
+    }
+
+    const save = async (nextEnabled) => {
+      setBusy(true)
+      try {
+        await persist(nextEnabled)
+        onNotice({ kind: 'ok', text: `${feature.label} ${nextEnabled === undefined ? '已保存' : nextEnabled ? '已开启' : '已关闭'}` })
+      } catch (error) {
+        onNotice({ kind: 'error', text: `${feature.label} 保存失败：${String(error?.message ?? error)}` })
+      } finally {
+        setBusy(false)
+      }
+    }
+
+    const run = async () => {
+      setBusy(true)
+      try {
+        await persist()
+        const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
+        onNotice(result?.error
+          ? { kind: 'error', text: `${feature.label} 发起失败：${result.error}` }
+          : { kind: 'ok', text: `${feature.label} 已提交服务回合，QQ 送达待确认` })
+        onRun()
+      } catch (error) {
+        onNotice({ kind: 'error', text: `${feature.label} 发起失败：${String(error?.message ?? error)}` })
+      } finally {
+        setBusy(false)
+      }
+    }
+
+    const field = (label, input) => h('label', { style: styles.field },
+      h('span', { style: styles.label }, label), input)
+    const numberInput = (value, setter, min, max) => h('input', {
+      style: styles.input, type: 'number', min, max, value,
+      onChange: (event) => setter(event.target.value),
+    })
+
+    return h('div', { style: enabled ? { ...styles.card, ...styles.cardOn } : styles.card },
+      h('div', {
+        style: { ...styles.cardHead, cursor: 'pointer' }, onClick: onToggle,
+        role: 'button', 'aria-expanded': open, tabIndex: 0,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle() }
+        },
+      },
+        h('span', { className: 'qqd-chev', style: { transform: open ? 'rotate(90deg)' : 'none' } }, '▸'),
+        h('span', { style: styles.cardTitle }, feature.label),
+        h('span', { style: styles.chip }, '内置'),
+        h('span', { style: styles.chip }, `每日 ${checkTime} 检查`),
+        h('div', { style: { marginLeft: 'auto' }, onClick: (event) => event.stopPropagation() },
+          h(Switch, { checked: enabled, disabled: busy, label: `${feature.label} 开关`, onChange: (next) => { void save(next) } })),
+      ),
+      open ? h('div', null,
+        h('p', { style: styles.desc }, feature.description),
+        h('div', { style: styles.grid },
+          field('目标会话', h('select', { style: styles.select, value: sessionId, onChange: (event) => setSessionId(event.target.value) },
+            h('option', { value: '' }, '选择会话…'),
+            ...sessions.map((session) => h('option', { key: session.sessionId, value: session.sessionId }, `${session.title ?? '(无标题)'} · ${session.sessionId.slice(0, 8)}`)),
+            sessionId !== '' && !sessions.some((session) => session.sessionId === sessionId)
+              ? h('option', { value: sessionId }, `(不在列表中) ${sessionId.slice(0, 8)}`) : null)),
+          field('每日检查时间', h('input', { style: styles.input, type: 'time', value: checkTime, onChange: (event) => setCheckTime(event.target.value) })),
+          field('触发概率（%）', numberInput(chancePercent, setChancePercent, 0, 100)),
+          field('发送冷却（天）', numberInput(cooldownDays, setCooldownDays, 1, 30)),
+          field('安静时段开始（小时）', numberInput(quietStart, setQuietStart, 0, 23)),
+          field('安静时段结束（小时）', numberInput(quietEnd, setQuietEnd, 0, 23)),
+          field('话题提示（多个话题用 | 分隔）', h('input', { style: styles.input, value: topics, maxLength: 120, placeholder: '留空使用内置话题', onChange: (event) => setTopics(event.target.value) })),
+        ),
+        h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会避开最近 6 小时有活动的会话；“立即发起”会跳过这些限制。`),
+        h('p', { style: styles.desc },
+          (cronRules(feature.cron)[0] ?? '') !== (() => { const [hour, minute] = checkTime.split(':').map(Number); return `${minute} ${hour} * * *` })()
+            ? '保存后更新下次检查时间'
+            : feature.nextRunAt > 0 ? `${enabled ? '下次执行' : '启用后下次计划执行'}：${formatZonedTime(feature.nextRunAt, feature.timeZone ?? 'Asia/Shanghai')}` : '暂无下一次检查时间'),
+        h('div', { style: styles.cardFoot },
+          h('button', { type: 'button', style: styles.primaryButton, disabled: busy, onClick: () => { void save() } }, '保存'),
+          h('button', { type: 'button', style: styles.ghostButton, disabled: busy, onClick: () => { void run() } }, '立即发起'),
+          h('span', { style: feature.lastResult?.error ? styles.statusError : styles.statusLine },
+            feature.lastResult?.error ? `上次失败：${feature.lastResult.error}` : `上次检查：${formatRelative(feature.lastRunAt)}`),
+        ),
+      ) : h('p', { style: styles.collapsedLine }, `上次检查：${formatRelative(feature.lastRunAt)}`),
+    )
+  }
+
+  return ChatCard
+}
