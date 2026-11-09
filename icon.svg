@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="QQ Bot Dispatch">
+  <rect x="4" y="8" width="56" height="40" rx="12" fill="#247bbf"/>
+  <path d="M20 56l8-8H20z" fill="#247bbf"/>
+  <path d="M24 28h16m-5-6l6 6-6 6" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
