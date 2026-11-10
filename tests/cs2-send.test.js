@@ -16,7 +16,7 @@ test('立即检查去重，立即发送重发已通知的匹配赛事', async ()
   const sent = []
   const provider = createLiquipediaProvider({
     loadMatches: async () => [match],
-    deliver: async (message) => { sent.push(message); return { channel: 'qq-text' } },
+    serviceTurn: { dispatch: async (message) => { sent.push(message) } },
   })
   const feature = {
     source: { id: 'liquipedia' }, values: { teams: [], tiers: [] },
@@ -50,7 +50,7 @@ test('运行时仅把显式重发选项传给 provider', async () => {
   assert.deepEqual(received, [false, true, false])
 })
 
-test('服务回合模式按赛事提交模板任务，不调用 QQ 直发并沿用去重', async () => {
+test('服务回合模式按赛事提交模板任务并沿用去重', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const makeMatch = (id, tournament, hour) => ({
     id, timestamp: Math.floor((now + hour * 3_600_000) / 1000),
@@ -59,10 +59,8 @@ test('服务回合模式按赛事提交模板任务，不调用 QQ 直发并沿�
   })
   const matches = [makeMatch('one', 'Test Cup', 1), makeMatch('two', 'Test Cup', 2), makeMatch('three', 'Other Cup', 3)]
   const submitted = []
-  let directCalls = 0
   const provider = createLiquipediaProvider({
     loadMatches: async () => matches,
-    deliver: async () => { directCalls += 1 },
     serviceTurn: { dispatch: async (message) => submitted.push(message) },
   })
   const feature = {
@@ -75,7 +73,6 @@ test('服务回合模式按赛事提交模板任务，不调用 QQ 直发并沿�
   assert.equal(result.channel, 'service-turn')
   assert.equal(result.sent, 3)
   assert.equal(submitted.length, 2)
-  assert.equal(directCalls, 0)
   assert.equal(submitted[0].sessionId, 'session-1')
   assert.match(submitted[0].text, /# Test Cup/)
   assert.match(submitted[0].text, /## 对局[\s\S]*Team A[\s\S]*Team B[\s\S]*## 焦点分析/)
@@ -87,6 +84,70 @@ test('服务回合模式按赛事提交模板任务，不调用 QQ 直发并沿�
   assert.equal(submitted.length, 2)
   assert.equal((await provider({ ...input, forceResend: true })).sent, 3)
   assert.equal(submitted.length, 4)
+})
+
+test('固定内容通知走服务回合，提交失败不记录已通知', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const match = {
+    id: 'match-one', timestamp: Math.floor((now + 60_000) / 1000),
+    teamA: 'Team A', teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament: 'Test Cup', tournamentPage: '', logoA: null, logoB: null, bestOf: 3,
+  }
+  const submitted = []
+  let fail = true
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [match],
+    serviceTurn: { dispatch: async (message) => {
+      submitted.push(message)
+      if (fail) throw new Error('提交失败')
+    } },
+  })
+  const feature = {
+    source: { id: 'liquipedia' }, deliveryMode: 'direct',
+    values: { teams: [], tiers: [] }, seen: {}, focusCard: true,
+  }
+  const input = { feature, settings: { deliveryMethod: 'service-turn' }, target: { sessionId: 'session-1' }, ctx: {}, now: () => now }
+  await assert.rejects(provider(input), /提交失败/)
+  assert.equal(feature.seen[match.id], undefined)
+  fail = false
+  const result = await provider(input)
+  assert.equal(result.channel, 'service-turn')
+  assert.equal(result.sent, 1)
+  assert.equal(feature.seen[match.id], now)
+  assert.equal(submitted[1].sessionId, 'session-1')
+  assert.match(submitted[1].text, /# Test Cup/)
+  assert.match(submitted[1].text, /Team A.*Team B/s)
+  assert.doesNotMatch(submitted[1].text, /\{\{focusAnalysis\}\}/)
+  assert.equal((await provider(input)).sent, 0)
+})
+
+test('全局 SDK 模式发送固定内容，不提交服务回合', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const match = {
+    id: 'sdk-one', timestamp: Math.floor((now + 60_000) / 1000),
+    teamA: 'Team A', teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament: 'SDK Cup', tournamentPage: '', logoA: null, logoB: null, bestOf: 3,
+  }
+  const sent = []
+  let fail = true
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [match],
+    upstreamSender: { send: async (item) => {
+      if (fail) throw new Error('QQ 发送失败')
+      sent.push(item)
+    } },
+    serviceTurn: { dispatch: async () => { throw new Error('不应提交服务回合') } },
+  })
+  const feature = { source: { id: 'liquipedia' }, deliveryMode: 'direct', values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'session-1' }, now: () => now }
+  await assert.rejects(provider(input), /QQ 发送失败/)
+  assert.equal(feature.seen[match.id], undefined)
+  fail = false
+  const result = await provider(input)
+  assert.equal(result.channel, 'qq-sdk')
+  assert.equal(sent.length, 1)
+  assert.match(sent[0].text, /# SDK Cup/)
+  assert.equal(feature.seen[match.id], now)
 })
 
 test('多场赛事提交中途失败时仅记录已提交的赛事', async () => {

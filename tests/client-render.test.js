@@ -5,6 +5,7 @@ import { createCommon } from '../client/common.js'
 import { createSessionTables } from '../client/tables.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
+import { createExtensionCard } from '../client/extension-card.js'
 
 const h = (type, props, ...children) => ({ type, props, children })
 const React = {
@@ -14,6 +15,18 @@ const React = {
   useState: (value) => [value, () => {}],
 }
 const common = createCommon({ h, C, styles })
+
+test('扩展模组使用通用卡片，关闭时不能立即运行', () => {
+  const ExtensionCard = createExtensionCard({ React, h, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
+  const view = ExtensionCard({
+    feature: { id: 'sample-alert', label: '示例通知', extension: true, enabled: false, target: { sessionId: '' }, fields: [], values: {} },
+    sessions: [], onSaved: () => {}, onRun: () => {}, onNotice: () => {},
+  })
+  assert.match(JSON.stringify(view), /同一进程运行/)
+  const runButton = view.children.find((item) => item?.type === 'div' && item.children?.some((child) => child?.type === 'button' && child.children?.includes('立即运行')))
+    ?.children.find((item) => item?.type === 'button' && item.children?.includes('立即运行'))
+  assert.equal(runButton?.props.disabled, true)
+})
 
 test('有會話資料時可繪製會話列表', () => {
   const { SessionTable } = createSessionTables({ h, C, styles, ...common })
@@ -149,4 +162,43 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
   await done
   assert.equal(submitted[0].deliveryMode, 'service-turn')
   assert.equal(submitted[0].serviceTemplate, template)
+})
+
+test('CS2 直接发送模式显示全局配置提示，模板暂不可编辑', async () => {
+  let submitted
+  let finished
+  const done = new Promise((resolve) => { finished = resolve })
+  const FeatureCard = createFeatureCard({
+    React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (_path, body) => {
+      submitted = body
+      return { features: [{ id: 'cs2-matches', enabled: body.enabled, focusCard: body.focusCard }] }
+    },
+  })
+  const view = FeatureCard({
+    feature: {
+      id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
+      deliveryMode: 'service-turn',
+      values: { teams: [], tiers: [] }, fields: [], intervalMinutes: 60,
+      scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: true,
+      credential: { configured: false, writable: false }, lastRunAt: 0,
+    },
+    settings: { deliveryMethod: 'upstream-sdk' },
+    sessions: [{ sessionId: 'session-1', scope: 'group', title: '赛事群' }], open: true,
+    onToggle: () => {}, onSaved: finished, onRun: () => {}, onNotice: () => {},
+  })
+  const nodes = []
+  const visit = (node) => {
+    if (Array.isArray(node)) { node.forEach(visit); return }
+    if (node === null || typeof node !== 'object') return
+    nodes.push(node)
+    node.children?.forEach(visit)
+  }
+  visit(view)
+  assert.match(JSON.stringify(view), /全局当前为直接发送模式/)
+  assert.ok(nodes.some((node) => node.type === 'textarea' && node.props.disabled === true))
+  nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
+  await done
+  assert.equal(submitted.deliveryMode, 'service-turn')
 })

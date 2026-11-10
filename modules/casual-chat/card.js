@@ -4,7 +4,7 @@ import { sessionTargetOptions } from '../../client/session-options.js'
 export function createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
   const { useState } = React
 
-  function ChatCard({ feature, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
+  function ChatCard({ feature, settings, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
     const values = feature.values ?? {}
     const [enabled, setEnabled] = useState(feature.enabled === true)
     const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
@@ -62,7 +62,9 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
         const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
         onNotice(result?.error
           ? { kind: 'error', text: `${feature.label} 发起失败：${result.error}` }
-          : { kind: 'ok', text: `${feature.label} 已提交服务回合，QQ 送达待确认` })
+          : result?.channel === 'qq-sdk'
+            ? { kind: 'ok', text: `${feature.label} 已调用上游 QQ Bot 发送话题` }
+            : { kind: 'ok', text: `${feature.label} 已提交服务回合，QQ 送达待确认` })
         onRun()
       } catch (error) {
         onNotice({ kind: 'error', text: `${feature.label} 发起失败：${String(error?.message ?? error)}` })
@@ -93,7 +95,9 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
           h(Switch, { checked: enabled, disabled: busy, label: `${feature.label} 开关`, onChange: (next) => { void save(next) } })),
       ),
       open ? h('div', null,
-        h('p', { style: styles.desc }, feature.description),
+        h('p', { style: styles.desc }, settings?.deliveryMethod === 'upstream-sdk'
+          ? '当前全局使用上游 QQ Bot 直接发送：选中的话题会作为开场白原文发出，不结合会话上下文生成。'
+          : feature.description),
         h('div', { style: styles.grid },
           field('目标会话', h('div', { style: { display: 'flex', gap: 6 } },
             h('select', { style: { ...styles.select, flex: 1, minWidth: 0 }, value: sessionId, onChange: (event) => setSessionId(event.target.value), onFocus: () => { void onRefreshSessions?.() } },

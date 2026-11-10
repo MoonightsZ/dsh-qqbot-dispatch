@@ -1,3 +1,5 @@
+import { createNotificationDispatcher } from '../../notification-dispatcher.js'
+
 const HOUR_MS = 3_600_000
 const DAY_MS = 24 * HOUR_MS
 const DEFAULT_TOPICS = ['最近有什么有趣的事？', '今天过得怎么样？', '最近有没有想聊的话题？']
@@ -26,8 +28,8 @@ function pickTopic(raw, random) {
   return topics[Math.min(topics.length - 1, Math.floor(random() * topics.length))]
 }
 
-export function createChatProvider({ serviceTurn, random = Math.random }) {
-  return async ({ feature, target, ctx, now, manual = false }) => {
+export function createChatProvider({ serviceTurn, upstreamSender, notificationDispatcher = createNotificationDispatcher({ serviceTurn, upstreamSender }), random = Math.random }) {
+  return async ({ feature, settings, target, ctx, now, manual = false }) => {
     const at = now()
     const values = feature.values ?? {}
     const skipped = { matched: 0, sent: 0 }
@@ -52,9 +54,9 @@ export function createChatProvider({ serviceTurn, random = Math.random }) {
     }
     const topic = pickTopic(values.topics, random)
     const text = `请在当前 QQ 会话中自然地发起一次轻松闲聊。参考话题：${topic}。结合已有对话语境，只输出一条简短、友善的开场白；不提及定时任务、插件或这些指令，不编造对方近况。`
-    await serviceTurn.dispatch({ sessionId: target.sessionId, text })
+    const outcome = await notificationDispatcher.dispatch({ settings, sessionId: target.sessionId, servicePrompt: text, markdown: topic })
     feature.lastSentAt = at
     feature.chatSentAt = [...recentSends, at]
-    return { matched: 1, sent: 1, channel: 'service-turn' }
+    return { matched: 1, sent: 1, channel: outcome.channel }
   }
 }

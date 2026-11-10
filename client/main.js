@@ -5,6 +5,7 @@ import { createSessionTables } from './tables.js'
 import { createFeatureNavigation } from './feature-navigation.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
+import { createExtensionCard } from './extension-card.js'
 
 const h = React.createElement
 const { useCallback, useEffect, useRef, useState } = React
@@ -12,12 +13,14 @@ const SESSIONS_PATH = '/qqbot-tool-dispatch/sessions'
 const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
 const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
 const FEATURES_PATH = '/qqbot-tool-dispatch/features'
+const SETTINGS_PATH = '/qqbot-tool-dispatch/settings'
 const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
 const { readJson, postJson, formatRelative, formatAbsolute, PanelIcon, Switch, StatusPill, Section } = createCommon({ h, C, styles })
 const { SessionTable } = createSessionTables({ h, C, styles, formatRelative, formatAbsolute, StatusPill })
 const FeatureNavigation = createFeatureNavigation({ h, styles })
 const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
 const ChatCard = createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
+const ExtensionCard = createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
 
 function DispatchSessionsPage() {
   const [snapshot, setSnapshot] = useState(null)
@@ -30,6 +33,7 @@ function DispatchSessionsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [sessionLoading, setSessionLoading] = useState(false)
   const [rowBusy, setRowBusy] = useState('')
+  const [settingsBusy, setSettingsBusy] = useState(false)
   const sessionRequestId = useRef(0)
 
   const refreshSessions = useCallback(async (showLoading = false) => {
@@ -61,6 +65,19 @@ function DispatchSessionsPage() {
       /* keep the last snapshot */
     }
   }, [])
+
+  const saveDeliveryMethod = async (deliveryMethod) => {
+    setSettingsBusy(true)
+    try {
+      const result = await postJson(SETTINGS_PATH, { deliveryMethod })
+      setFeatures((previous) => previous === null ? previous : { ...previous, settings: result.settings })
+      setNotice({ kind: 'ok', text: '全局投递方式已保存' })
+    } catch (failure) {
+      setNotice({ kind: 'error', text: `保存投递方式失败：${String(failure?.message ?? failure)}` })
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
 
   /**
    * 刷新：先让宿主去 QQ 平台取每个群的群名并改会话标题，再重读列表。
@@ -215,6 +232,12 @@ function DispatchSessionsPage() {
           style: tab === 'features' ? styles.tabActive : styles.tab,
           onClick: () => { setTab('features'); void refreshSessions() },
         }, `功能 ${features?.features.length ?? 0}`),
+        h('button', {
+          type: 'button',
+          className: tab === 'settings' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
+          style: tab === 'settings' ? styles.tabActive : styles.tab,
+          onClick: () => setTab('settings'),
+        }, '配置'),
       ),
 
       tab !== 'sessions' ? null : h('div', null,
@@ -233,15 +256,16 @@ function DispatchSessionsPage() {
       tab !== 'features' ? null : h('div', null,
         h(Section, { title: '功能', meta: features === null ? '' : `${features.features.length} 项` },
           h('p', { style: { ...styles.desc, marginTop: 0, marginBottom: 10 } },
-            '各模组独立保存开关与配置。赛事通知使用数据源；偶尔闲聊使用内置服务回合。'),
+            '各模组独立保存开关与配置；通知投递方式由「配置」页统一控制。'),
           features === null
             ? h('div', { style: styles.empty }, loading ? '读取中…' : '功能接口不可用（宿主未提供）')
             : h('div', { style: { containerType: 'inline-size' } }, h('div', { className: 'qqd-feature-layout' },
               h(FeatureNavigation, { features: features.features, selectedId: activeFeatureId, onSelect: setSelectedFeatureId }),
               h('div', { style: { minWidth: 0 } },
                 ...features.features.map((feature) => h('div', { key: feature.id, hidden: activeFeatureId !== feature.id },
-                  h(feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
+                  h(feature.extension ? ExtensionCard : feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
                     feature,
+                    settings: features.settings,
                     sessions,
                     onRefreshSessions: refreshSessions,
                     open: true,
@@ -256,8 +280,26 @@ function DispatchSessionsPage() {
         ),
       ),
 
+      tab !== 'settings' ? null : h(Section, { title: '全局通知投递' },
+        features === null
+          ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
+          : h('div', { style: styles.panel, padding: '16px 18px' },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+              h(Switch, {
+                checked: features.settings?.deliveryMethod === 'upstream-sdk',
+                disabled: settingsBusy,
+                label: '直接调用上游 QQ Bot 发送 Markdown',
+                onChange: (enabled) => { void saveDeliveryMethod(enabled ? 'upstream-sdk' : 'service-turn') },
+              }),
+              h('strong', null, features.settings?.deliveryMethod === 'upstream-sdk' ? '参考方式：直接发送 Markdown' : '现有方式：服务回合投递'),
+            ),
+            h('p', { style: styles.desc }, '关闭：所有模组通过服务回合让 Agent 生成 QQ 回复。开启：捕获上游 QQ Bot 实例并调用 sendMarkdown；CS2 发送固定赛事正文，偶尔闲聊直接发送选中的话题。'),
+            h('p', { style: styles.warnText }, '直接发送模式需先在 QQ 会话收到消息以取得 Bot 实例；无法取得时会报错且不会记录为已发送。该模式不生成 CS2 焦点分析，QQ 送达仍受平台限制。'),
+          ),
+      ),
+
       h('div', { style: styles.footer },
-        h('div', null, '活跃 = 进程内有 Agent；休眠 = 进程内没有 Agent。赛事通知可提交服务回合并尝试主动推送到 QQ，实际送达受 QQ 平台限制。'),
+        h('div', null, '活跃 = 进程内有 Agent；休眠 = 进程内没有 Agent。通知按「配置」页选择的全局方式投递，实际送达受 QQ 平台限制。'),
         h('div', null, '会话来自 QQ Bot 当前的 peer 映射；刷新会话只读取本地数据，同步群名会请求 QQ 平台并更新会话标题。'),
         snapshot === null ? null : h('div', { style: styles.footerRow },
           h('span', null, `appId ${snapshot.appId}`),

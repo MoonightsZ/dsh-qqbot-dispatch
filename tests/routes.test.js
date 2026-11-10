@@ -33,6 +33,35 @@ test('功能設定路由拒絕跨來源的寫入', async () => {
   assert.equal(saved, false)
 })
 
+test('全局配置路由保存投递方式并拒绝跨来源写入', async () => {
+  const handlers = new Map()
+  const saved = []
+  registerDispatchRoutes({
+    inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
+    get: () => undefined,
+  }, {
+    resolver: createSessionResolver({ appId: 'app' }),
+    groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} },
+    features: {
+      snapshot: async () => ({ settings: { deliveryMethod: 'service-turn' } }),
+      saveSettings: (body) => { saved.push(body); return body },
+    },
+    defaultMode: 'queue', qqbotApi: {}, loadOptionalPatches: () => [],
+  })
+  const send = async (origin) => {
+    const req = Readable.from([Buffer.from(JSON.stringify({ deliveryMethod: 'upstream-sdk' }))])
+    req.method = 'POST'
+    req.headers = { host: 'localhost:3000', ...(origin ? { origin } : {}) }
+    let status
+    await handlers.get('/qqbot-tool-dispatch/settings')(req, { writeHead: (code) => { status = code }, end: () => {} })
+    return status
+  }
+  assert.equal(await send('https://other.example'), 403)
+  assert.equal(saved.length, 0)
+  assert.equal(await send(), 200)
+  assert.deepEqual(saved, [{ deliveryMethod: 'upstream-sdk' }])
+})
+
 test('立即发送请求显式传递重发选项', async () => {
   const handlers = new Map()
   const calls = []

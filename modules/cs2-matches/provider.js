@@ -11,8 +11,8 @@
  *
  * @module dsh-qqbot-dispatch/liquipedia
  */
-import { randomUUID } from 'node:crypto'
-import { composeCs2ServiceTurnPrompt } from './template.js'
+import { composeCs2FixedNoticePrompt, composeCs2ServiceTurnPrompt } from './template.js'
+import { createNotificationDispatcher } from '../../notification-dispatcher.js'
 
 const API = 'https://liquipedia.net/counterstrike/api.php'
 const USER_AGENT = 'dsh-qqbot-dispatch/0.1 (DSH QQ bot plugin; +https://github.com/deepseek-ai/dsh)'
@@ -214,26 +214,6 @@ function pickFocus(matches, watched, nowMs) {
   return [...pool].sort((left, right) => left.timestamp - right.timestamp)[0]
 }
 
-/** 图文卡片 for the focus match; needs an https team logo from the parse. */
-function composeCard(match, tiers) {
-  if (match === undefined) return undefined
-  const picture = match.logoA ?? match.logoB
-  if (picture === null || picture === undefined) return undefined
-  const when = formatDayTime(match.timestamp)
-  const tier = tiers.get(match.tournamentPage)
-  const title = [...`${when.time} ${match.teamA}　⚔　${match.teamB}`].slice(0, 50).join('')
-  const description = [
-    humanizeTournament(match.tournament),
-    tier === undefined || tier === 'M' ? '' : `${tier} 级`,
-    match.bestOf === null ? '' : `Bo${match.bestOf}`,
-  ].filter((part) => part !== '').join(' · ').slice(0, 200)
-  const url = match.tournamentPage === ''
-    ? 'https://liquipedia.net/counterstrike'
-    : `https://liquipedia.net/counterstrike/${match.tournamentPage}`
-  return { type: 'tuwen', content: { title, description, url, pic_url: picture } }
-}
-
-
 function pruneSeen(feature) {
   const floor = Date.now() - SEEN_RETENTION_MS
   if (feature.seen === undefined) feature.seen = {}
@@ -247,10 +227,9 @@ function pruneSeen(feature) {
  * @returns a provider receiving `{ feature, target, ctx, now }`.
  */
 export function createLiquipediaProvider(options = {}) {
-  const deliver = options.deliver
-  const serviceTurn = options.serviceTurn
+  const notificationDispatcher = options.notificationDispatcher ?? createNotificationDispatcher(options)
   const readMatches = options.loadMatches ?? loadMatches
-  return async ({ feature, target, ctx, now, forceResend = false }) => {
+  return async ({ feature, settings, target, now, forceResend = false }) => {
     const sourceId = feature.source?.id ?? 'none'
     if (sourceId === 'none') return { matched: 0, sent: 0, error: '数据源尚未接入' }
     if (sourceId !== 'liquipedia') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现，请选择 Liquipedia` }
@@ -282,36 +261,19 @@ export function createLiquipediaProvider(options = {}) {
     if (fresh.length === 0) return { matched: selected.length, sent: 0 }
 
     const sections = composeSections(fresh, tiers)
-    const focus = pickFocus(fresh, watched, now())
-    const card = feature.focusCard === false ? undefined : composeCard(focus, tiers)
     const markSeen = (section) => { for (const match of section.matches) feature.seen[match.id] = checkedAt }
-    let channel = 'session'
-    if (feature.deliveryMode === 'service-turn') {
-      if (typeof serviceTurn?.dispatch !== 'function') throw new Error('服务回合投递不可用')
-      for (const section of sections) {
-        const sectionFocus = pickFocus(section.matches, watched, now()) ?? section.matches[0]
-        const text = composeCs2ServiceTurnPrompt(section, feature.serviceTemplate, sectionFocus)
-        await serviceTurn.dispatch({ sessionId: target.sessionId, text })
-        markSeen(section)
-      }
-      channel = 'service-turn'
-    } else if (typeof deliver === 'function') {
-      for (const section of sections) {
-        const sectionCard = focus !== undefined && card !== undefined && section.matches.includes(focus) ? card : undefined
-        const outcome = await deliver({ target, text: section.text, markdown: section.markdown, card: sectionCard, ctx })
-        if (typeof outcome?.channel === 'string') channel = outcome.channel
-        markSeen(section)
-      }
-    } else {
-      for (const section of sections) {
-        await ctx.sessionController.prompt({
-          requestId: randomUUID(),
-          sessionId: target.sessionId,
-          mode: 'queue',
-          content: [{ type: 'text', text: section.text }],
-        }, new AbortController().signal)
-        markSeen(section)
-      }
+    let channel = 'service-turn'
+    for (const section of sections) {
+      const outcome = await notificationDispatcher.dispatch({
+        settings,
+        sessionId: target.sessionId,
+        markdown: section.markdown,
+        servicePrompt: () => feature.deliveryMode === 'service-turn'
+          ? composeCs2ServiceTurnPrompt(section, feature.serviceTemplate, pickFocus(section.matches, watched, now()) ?? section.matches[0])
+          : composeCs2FixedNoticePrompt(section.markdown),
+      })
+      channel = outcome.channel
+      markSeen(section)
     }
 
     return { matched: selected.length, sent: fresh.length, channel }

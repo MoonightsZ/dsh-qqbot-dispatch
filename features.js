@@ -46,8 +46,8 @@ export const SOURCES = [
  */
 export const FEATURES = [cs2Matches, casualChat]
 
-function descriptor(id) {
-  const found = FEATURES.find((feature) => feature.id === id)
+function descriptor(id, entries = FEATURES) {
+  const found = entries.find((feature) => feature.id === id)
   if (found === undefined) throw new Error(`unknown feature: ${id}`)
   return found
 }
@@ -63,40 +63,42 @@ function defaultValues(entry) {
   return values
 }
 
-function defaultState(featureId) {
-  const entry = descriptor(featureId)
+function defaultFeature(entry) {
   return {
-    version: 1,
-    features: {
-      [featureId]: {
-        enabled: false,
-        target: { sessionId: '' },
-        source: entry.defaults?.source ?? { id: 'custom', baseUrl: '' },
-        intervalMinutes: entry.defaults?.intervalMinutes ?? 60,
-        scheduleMode: entry.defaults?.scheduleMode ?? 'interval',
-        cron: entry.defaults?.cron ?? [],
-        timeZone: 'Asia/Shanghai',
-        focusCard: true,
-        ...(featureId === 'cs2-matches' ? { deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE } : {}),
-        values: defaultValues(descriptor(featureId)),
-        lastRunAt: 0,
-        lastResult: null,
-        seen: {},
-        tierCache: {},
-      },
-    },
+    enabled: false,
+    target: { sessionId: '' },
+    source: entry.defaults?.source ?? { id: 'custom', baseUrl: '' },
+    intervalMinutes: entry.defaults?.intervalMinutes ?? 60,
+    scheduleMode: entry.defaults?.scheduleMode ?? 'interval',
+    cron: entry.defaults?.cron ?? [],
+    timeZone: 'Asia/Shanghai',
+    ...(entry.id === 'cs2-matches' ? { deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE } : {}),
+    values: defaultValues(entry),
+    lastRunAt: 0,
+    lastResult: null,
+    seen: {},
+    tierCache: {},
   }
 }
 
-function readStateFile(featureId, statePath) {
-  const base = defaultState(featureId)
+function defaultState(entries) {
+  return {
+    version: 1,
+    settings: { deliveryMethod: 'service-turn' },
+    features: Object.fromEntries(entries.map((entry) => [entry.id, defaultFeature(entry)])),
+  }
+}
+
+function readStateFile(entries, statePath) {
+  const base = defaultState(entries)
   try {
     if (!existsSync(statePath)) return base
     const parsed = JSON.parse(readFileSync(statePath, 'utf8'))
     if (parsed === null || typeof parsed !== 'object' || parsed.features === null || typeof parsed.features !== 'object') return base
+    base.settings.deliveryMethod = parsed.settings?.deliveryMethod === 'upstream-sdk' ? 'upstream-sdk' : 'service-turn'
     for (const [id, feature] of Object.entries(parsed.features)) {
       if (feature === null || typeof feature !== 'object') continue
-      base.features[id] = { ...(base.features[id] ?? base.features[featureId]), ...feature }
+      base.features[id] = { ...(base.features[id] ?? {}), ...feature }
     }
     return base
   } catch {
@@ -148,7 +150,6 @@ export function configFromInput(entry, input) {
   }
   return {
     enabled: source.enabled === true,
-    focusCard: source.focusCard !== false,
     scheduleMode,
     cron,
     timeZone,
@@ -178,6 +179,7 @@ function publicFeature(entry, feature, statePath, credential) {
     source,
     credential,
     fields: entry.fields,
+    extension: entry.extension === true,
     enabled: feature.enabled === true,
     target: feature.target ?? { sessionId: '' },
     intervalMinutes: feature.intervalMinutes ?? 60,
@@ -187,7 +189,6 @@ function publicFeature(entry, feature, statePath, credential) {
     cronValid: feature.scheduleMode !== 'cron' || parseCronList(feature.cron ?? '') !== undefined,
     cronDescription: feature.scheduleMode === 'cron' ? describeCron(feature.cron ?? '') : null,
     nextRunAt: nextRunAt(feature),
-    focusCard: feature.focusCard !== false,
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE,
@@ -215,6 +216,7 @@ function nextRunAt(feature) {
  */
 export function createFeatureRuntime(options) {
   const ctx = options.ctx
+  const entries = options.modules ?? FEATURES
   const statePath = options.statePath ?? STATE_PATH
   const now = options.now ?? (() => Date.now())
   const providers = new Map()
@@ -222,7 +224,7 @@ export function createFeatureRuntime(options) {
   let timer = null
   let startup = null
 
-  const read = () => readStateFile(FEATURES[0].id, statePath)
+  const read = () => readStateFile(entries, statePath)
 
   /** Credential presence for one feature, read from the host credential store. */
   async function credentialStatus(id) {
@@ -240,15 +242,23 @@ export function createFeatureRuntime(options) {
   async function snapshot() {
     const state = read()
     const features = []
-    for (const entry of FEATURES) {
-      const feature = state.features[entry.id] ?? defaultState(entry.id).features[entry.id]
+    for (const entry of entries) {
+      const feature = state.features[entry.id] ?? defaultFeature(entry)
       features.push(publicFeature(entry, feature, statePath, await credentialStatus(entry.id)))
     }
-    return { features }
+    return { features, settings: state.settings }
+  }
+
+  function saveSettings(input) {
+    if (input?.deliveryMethod !== 'service-turn' && input?.deliveryMethod !== 'upstream-sdk') throw new Error('未知的通知投递方式')
+    const state = read()
+    state.settings = { deliveryMethod: input.deliveryMethod }
+    writeStateFile(statePath, state)
+    return state.settings
   }
 
   async function save(id, input) {
-    const entry = descriptor(id)
+    const entry = descriptor(id, entries)
     const submitted = configFromInput(entry, input)
 
     const credentials = ctx.get('credentials')
@@ -260,7 +270,7 @@ export function createFeatureRuntime(options) {
     }
 
     const state = read()
-    const feature = state.features[id] ?? defaultState(id).features[id]
+    const feature = state.features[id] ?? defaultFeature(entry)
     Object.assign(feature, submitted)
     state.features[id] = feature
     writeStateFile(statePath, state)
@@ -269,12 +279,12 @@ export function createFeatureRuntime(options) {
 
   /** A provider may later fill this in; until then a run only records the gap. */
   function run(id, { manual = false, forceResend = false } = {}) {
-    const entry = descriptor(id)
+    const entry = descriptor(id, entries)
     const state = read()
-    const feature = state.features[id] ?? defaultState(id).features[id]
+    const feature = state.features[id] ?? defaultFeature(entry)
     const checkedAt = now()
     const result = { checkedAt, matched: 0, sent: 0, error: '' }
-    if (!feature.enabled && !manual) {
+    if (!feature.enabled && (!manual || entry.extension === true)) {
       return { skipped: true, reason: 'disabled' }
     }
     if (running.has(id)) return { skipped: true, reason: 'running' }
@@ -293,7 +303,7 @@ export function createFeatureRuntime(options) {
       .then(async () => {
         const sessionId = String(feature.target?.sessionId ?? '').trim()
         if (sessionId === '') throw new Error('未选择目标会话')
-        const outcome = await provider({ feature, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend })
+        const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend })
         result.matched = Number(outcome?.matched ?? 0)
         result.sent = Number(outcome?.sent ?? 0)
         if (typeof outcome?.error === 'string') result.error = outcome.error
@@ -325,14 +335,14 @@ export function createFeatureRuntime(options) {
 
   /** Register the data source that will feed one feature (currently none). */
   function registerProvider(id, provider) {
-    descriptor(id)
+    descriptor(id, entries)
     providers.set(id, provider)
     return () => providers.delete(id)
   }
 
   async function tick() {
     const state = read()
-    for (const entry of FEATURES) {
+    for (const entry of entries) {
       const feature = state.features[entry.id]
       if (feature === undefined || feature.enabled !== true) continue
       if (!providers.has(entry.id)) continue
@@ -365,5 +375,5 @@ export function createFeatureRuntime(options) {
     startup = null
   }
 
-  return { snapshot, save, run, registerProvider, start, stop, providers }
+  return { snapshot, save, saveSettings, run, registerProvider, start, stop, providers }
 }

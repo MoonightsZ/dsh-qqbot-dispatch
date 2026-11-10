@@ -121,15 +121,16 @@ function featureStatus(feature) {
   if (result !== null && result !== undefined && result.error) {
     return { text: `${formatRelative(feature.lastRunAt)} · 检查失败：${result.error}`, error: true }
   }
-  const channel = result?.channel?.startsWith('qq') ? ' · 已直发 QQ' : result?.channel === 'service-turn' ? ' · 已提交服务回合' : ''
+  const channel = result?.channel === 'qq-sdk' ? ' · 已调用上游发送' : result?.channel === 'service-turn' ? ' · 已提交服务回合' : ''
   const warning = typeof result?.warning === 'string' && result.warning !== '' ? ` · ${result.warning}` : ''
+  const countLabel = result?.channel === 'service-turn' ? '提交' : '发送'
   return {
-    text: `${formatRelative(feature.lastRunAt)} · 匹配 ${result?.matched ?? 0} · 发送 ${result?.sent ?? 0}${channel}${warning}`,
+    text: `${formatRelative(feature.lastRunAt)} · 匹配 ${result?.matched ?? 0} · ${countLabel} ${result?.sent ?? 0}${channel}${warning}`,
     error: false,
   }
 }
 
-function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
+function FeatureCard({ feature, settings, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
   const values = feature.values ?? {}
   const [enabled, setEnabled] = useState(feature.enabled === true)
   const [teams, setTeams] = useState(Array.isArray(values.teams) ? values.teams : [])
@@ -141,7 +142,6 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
   const [intervalText, setIntervalText] = useState(String(feature.intervalMinutes ?? 60))
-  const [focusCard, setFocusCard] = useState(feature.focusCard !== false)
   const [deliveryMode, setDeliveryMode] = useState(feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct')
   const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
   const [scheduleMode, setScheduleMode] = useState(feature.scheduleMode === 'cron' ? 'cron' : 'interval')
@@ -165,7 +165,6 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
     id: feature.id,
     enabled: nextEnabled === undefined ? enabled : nextEnabled,
     target: { sessionId },
-    focusCard,
     deliveryMode,
     serviceTemplate,
     scheduleMode,
@@ -189,7 +188,6 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
     setClearKey(false)
     const saved = next.features.find((item) => item.id === feature.id)
     setEnabled(saved?.enabled === true)
-    setFocusCard(saved?.focusCard !== false)
     onSaved(next)
     return next
   }
@@ -332,16 +330,18 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
     h('div', { style: styles.divider }),
 
     h('div', { style: styles.field },
-      h('span', { style: styles.label }, '通知投递方式'),
+      h('span', { style: styles.label }, '通知内容方式'),
       h('div', { style: styles.segmented },
         h('button', { type: 'button', style: deliveryMode === 'direct' ? styles.segOn : styles.seg,
-          onClick: () => setDeliveryMode('direct') }, '直发优先'),
+          onClick: () => setDeliveryMode('direct') }, '固定内容通知'),
         h('button', { type: 'button', style: deliveryMode === 'service-turn' ? styles.segOn : styles.seg,
           onClick: () => setDeliveryMode('service-turn') }, '服务回合生成'),
       ),
-      h('span', { style: styles.desc }, deliveryMode === 'service-turn'
-        ? '每个赛事提交一个服务回合，Agent 按模板生成对局与焦点分析；QQ 送达仍受平台限制。'
-        : '优先发送 QQ 卡片和 Markdown；失败时提交服务回合。'),
+      h('span', { style: styles.desc }, settings?.deliveryMethod === 'upstream-sdk'
+        ? '全局当前为直接发送模式：仅发送已排版赛事正文；焦点分析和下方模板暂不生效。可在「配置」页切换。'
+        : deliveryMode === 'service-turn'
+          ? '每个赛事提交一个服务回合，Agent 按模板生成对局与焦点分析；QQ 送达仍受平台限制。'
+          : '已排版的赛事正文通过服务回合提交，由上游会话出站链路投递。'),
     ),
     deliveryMode !== 'service-turn' ? null : h('div', { style: { ...styles.field, marginTop: 12 } },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -352,6 +352,7 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
       h('textarea', {
         style: { ...styles.input, minHeight: 180, resize: 'vertical', fontFamily: 'ui-monospace, monospace', lineHeight: 1.5 },
         value: serviceTemplate,
+        disabled: settings?.deliveryMethod === 'upstream-sdk',
         maxLength: 6000,
         'aria-label': 'CS2 赛事 Markdown 模板',
         onChange: (event) => setServiceTemplate(event.target.value),
@@ -437,29 +438,6 @@ function FeatureCard({ feature, sessions, open, navigationMode = false, onToggle
             : feature.nextRunAt > 0
               ? `${enabled ? '下次执行' : '启用后下次计划执行'}：${scheduleMode === 'cron' ? formatZonedTime(feature.nextRunAt, feature.timeZone ?? 'Asia/Shanghai') : formatAbsolute(feature.nextRunAt)}`
               : '暂无下一次执行时间（请检查规则与时区）'),
-      ),
-    ),
-
-    h('details', { style: styles.details },
-      h('summary', { style: styles.summary },
-        h('span', { className: 'qqd-chev' }, '▸'),
-        h('span', null, '高级'),
-      ),
-      h('div', { style: styles.detailsBody },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-          h(Switch, {
-            checked: focusCard,
-            disabled: busy || deliveryMode === 'service-turn',
-            label: '焦点战卡片',
-            onChange: (next) => {
-              setFocusCard(next)
-              void save(undefined, { focusCard: next })
-            },
-          }),
-          h('span', { style: { color: C.secondary, fontSize: 11.5 } }, deliveryMode === 'service-turn'
-            ? '服务回合模式不直发图文卡片；切回直发模式后此设置仍保留'
-            : '为 24 小时内的焦点战单独发一张带图卡片'),
-        ),
       ),
     ),
 

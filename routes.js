@@ -14,6 +14,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
     if (webServer === undefined || typeof webServer.register !== 'function') return
     const SESSIONS_PATH = '/qqbot-tool-dispatch/sessions'
     const FEATURES_PATH = '/qqbot-tool-dispatch/features'
+    const SETTINGS_PATH = '/qqbot-tool-dispatch/settings'
     const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
     const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
     const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
@@ -302,6 +303,30 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
             const body = await readJsonBody(req)
             await features.save(String(body?.id ?? ''), body)
             sendJson(res, 200, await features.snapshot())
+          } catch (error) {
+            sendJson(res, 400, { error: describeFailure(error) })
+          }
+        },
+      }),
+      webServer.register({
+        kind: 'exact',
+        path: SETTINGS_PATH,
+        handler: async (req, res) => {
+          if (!sameOrigin(req)) {
+            sendJson(res, 403, { error: 'forbidden' })
+            return
+          }
+          if (req.method === 'GET' || req.method === 'HEAD') {
+            sendJson(res, 200, { settings: (await features.snapshot()).settings })
+            return
+          }
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' })
+            return
+          }
+          try {
+            const body = await readJsonBody(req)
+            sendJson(res, 200, { settings: features.saveSettings(body) })
           } catch (error) {
             sendJson(res, 400, { error: describeFailure(error) })
           }

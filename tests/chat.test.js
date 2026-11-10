@@ -35,6 +35,21 @@ test('自动闲聊满足频率条件才提交服务回合，并记录上次发�
   assert.equal(calls.length, 1)
 })
 
+test('全局 SDK 模式将选中的闲聊话题直接发送', async () => {
+  const sent = []
+  const provider = createChatProvider({
+    serviceTurn: { dispatch: async () => { throw new Error('不应提交服务回合') } },
+    upstreamSender: { send: async (item) => sent.push(item) },
+    random: () => 0,
+  })
+  const at = Date.parse('2026-11-09T11:00:00Z')
+  const feature = { values: { topics: '最近有什么好玩的事？' }, lastSentAt: 0 }
+  const result = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'session-123' }, ctx: {}, now: () => at, manual: true })
+  assert.equal(result.channel, 'qq-sdk')
+  assert.deepEqual(sent, [{ sessionId: 'session-123', text: '最近有什么好玩的事？' }])
+  assert.equal(feature.lastSentAt, at)
+})
+
 test('安静时段、近期活动或未抽中时不发起自动闲聊', async () => {
   const calls = []
   const feature = { values: { chancePercent: '30', cooldownDays: '3', quietStart: '22', quietEnd: '9' }, timeZone: 'Asia/Shanghai', lastSentAt: 0 }

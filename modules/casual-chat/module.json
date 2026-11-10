@@ -1,0 +1,14 @@
+{
+  "id": "casual-chat",
+  "label": "偶尔闲聊",
+  "description": "每天定点检查一次；通过概率、冷却和近期活动限制，偶尔在指定 QQ 会话发起简短聊天。",
+  "provider": "builtin",
+  "fields": [
+    { "key": "chancePercent", "kind": "text", "label": "触发概率", "default": "30" },
+    { "key": "cooldownDays", "kind": "text", "label": "发送冷却天数", "default": "3" },
+    { "key": "quietStart", "kind": "text", "label": "安静时段开始", "default": "22" },
+    { "key": "quietEnd", "kind": "text", "label": "安静时段结束", "default": "9" },
+    { "key": "topics", "kind": "text", "label": "话题提示", "default": "" }
+  ],
+  "defaults": { "source": { "id": "none" }, "intervalMinutes": 1440, "scheduleMode": "cron", "cron": ["0 19 * * *"] }
+}
