@@ -189,7 +189,7 @@ function DispatchSessionsPage() {
       h('div', { style: styles.header },
         h('div', { style: styles.headerText },
           h('h1', { style: styles.title }, 'QQ 机器人 · 通知助手'),
-          h('p', { style: styles.subtitle }, '基于 QQ 机器人管理群聊、私聊会话与赛事通知。'),
+          h('p', { style: styles.subtitle }, '向 QQ 会话下发任务，管理可自定义的功能模组。'),
         ),
         h('div', { style: { display: 'flex', gap: 8 } }, h('button', {
           type: 'button',

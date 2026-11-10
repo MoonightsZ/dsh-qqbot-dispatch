@@ -2,7 +2,7 @@
   "name": "dsh-qqbot-dispatch",
   "version": "0.1.0",
   "private": true,
-  "description": "QQ Bot notification assistant for @tencent-connect/dsh-qqbot",
+  "description": "Community add-on for @tencent-connect/dsh-qqbot: dispatch tasks to QQ sessions and manage customizable feature modules",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

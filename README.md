@@ -2,7 +2,7 @@
 
 **中文展示名称：QQ 机器人 · 通知助手。**
 
-这是 `@tencent-connect/dsh-qqbot` 的补充插件：向 QQ Bot 建立的会话下发任务，并在 DSH 侧栏查看会话、设置 CS2 赛事通知与偶尔闲聊。它会读取 qqbot 的 peer 映射数据，沿用 profile 中 `im-qqbot` 的凭证。
+本插件是 `@tencent-connect/dsh-qqbot` 的社区补充，可向 QQ 机器人建立的群聊或私聊会话下发任务，并在 DSH 侧栏查看会话、管理可自定义的功能模组。内置模组包括 CS2 赛事通知和偶尔闲聊，也可按需添加其他模组。
 
 ## 安装
 
