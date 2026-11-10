@@ -330,15 +330,17 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     h('div', { style: styles.divider }),
 
     h('div', { style: styles.field },
-      h('span', { style: styles.label }, '通知内容方式'),
+      h('span', { style: styles.label }, '内容生成方式'),
       h('div', { style: styles.segmented },
         h('button', { type: 'button', style: deliveryMode === 'direct' ? styles.segOn : styles.seg,
-          onClick: () => setDeliveryMode('direct') }, '固定内容通知'),
+          disabled: settings?.deliveryMethod === 'upstream-sdk',
+          onClick: () => setDeliveryMode('direct') }, '固定赛事内容'),
         h('button', { type: 'button', style: deliveryMode === 'service-turn' ? styles.segOn : styles.seg,
-          onClick: () => setDeliveryMode('service-turn') }, '服务回合生成'),
+          disabled: settings?.deliveryMethod === 'upstream-sdk',
+          onClick: () => setDeliveryMode('service-turn') }, 'AI 焦点分析'),
       ),
       h('span', { style: styles.desc }, settings?.deliveryMethod === 'upstream-sdk'
-        ? '全局当前为直接发送模式：仅发送已排版赛事正文；焦点分析和下方模板暂不生效。可在「配置」页切换。'
+        ? '全局当前为直接发送模式：仅发送固定赛事内容；已保存的内容生成方式和模板会保留，切回服务回合投递后生效。'
         : deliveryMode === 'service-turn'
           ? '每个赛事提交一个服务回合，Agent 按模板生成对局与焦点分析；QQ 送达仍受平台限制。'
           : '已排版的赛事正文通过服务回合提交，由上游会话出站链路投递。'),
@@ -347,6 +349,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
         h('span', { style: styles.label }, 'Markdown 模板'),
         h('button', { type: 'button', style: { ...styles.ghostButton, marginLeft: 'auto', padding: '3px 9px' },
+          disabled: settings?.deliveryMethod === 'upstream-sdk',
           onClick: () => setServiceTemplate(DEFAULT_CS2_SERVICE_TEMPLATE) }, '恢复默认模板'),
       ),
       h('textarea', {

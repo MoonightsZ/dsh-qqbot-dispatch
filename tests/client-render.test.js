@@ -36,6 +36,9 @@ test('有會話資料時可繪製會話列表', () => {
     onRefresh: () => {},
   })
   assert.equal(view.type, 'table')
+  assert.equal(view.props.className, 'qqd-session-table')
+  const cells = view.children[1].children[0][0].children
+  assert.deepEqual(cells.map((cell) => cell.props['data-label']), ['会话', '状态', '最后活动', '群信息'])
   assert.match(JSON.stringify(view), /刷新群名/)
 })
 
@@ -52,11 +55,12 @@ test('群不可用的会话仍可见并提示重新同步', () => {
 test('偶尔闲聊使用独立设置卡片', () => {
   const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
   const view = ChatCard({
-    feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: '' }, scheduleMode: 'cron', cron: ['0 19 * * *'], timeZone: 'Asia/Shanghai', nextRunAt: Date.parse('2026-11-09T11:00:00Z'), values: { chancePercent: '30', cooldownDays: '3', quietStart: '22', quietEnd: '9', topics: '' }, lastRunAt: 0 },
+    feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: '' }, scheduleMode: 'cron', cron: ['0 19 * * *'], timeZone: 'Asia/Shanghai', nextRunAt: Date.parse('2026-11-09T11:00:00Z'), values: { chancePercent: '30', cooldownHours: '72', quietStart: '22', quietEnd: '9', topics: '' }, lastRunAt: 0 },
     sessions: [], open: true, onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {},
   })
   assert.equal(view.type, 'div')
   assert.match(JSON.stringify(view), /每日检查时间/)
+  assert.match(JSON.stringify(view), /发送冷却（小时）/)
   assert.match(JSON.stringify(view), /话题提示/)
   assert.match(JSON.stringify(view), /下次计划执行/)
   assert.match(JSON.stringify(view), /刷新选项/)
@@ -155,7 +159,9 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
     node.children?.forEach(visit)
   }
   visit(view)
-  assert.match(JSON.stringify(view), /服务回合生成/)
+  assert.match(JSON.stringify(view), /内容生成方式/)
+  assert.match(JSON.stringify(view), /AI 焦点分析/)
+  assert.match(JSON.stringify(view), /固定赛事内容/)
   assert.match(JSON.stringify(view), /恢复默认模板/)
   assert.equal(nodes.find((node) => node.type === 'textarea')?.props.value, template)
   nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
@@ -198,6 +204,9 @@ test('CS2 直接发送模式显示全局配置提示，模板暂不可编辑', a
   visit(view)
   assert.match(JSON.stringify(view), /全局当前为直接发送模式/)
   assert.ok(nodes.some((node) => node.type === 'textarea' && node.props.disabled === true))
+  for (const label of ['固定赛事内容', 'AI 焦点分析', '恢复默认模板']) {
+    assert.equal(nodes.find((node) => node.type === 'button' && node.children.includes(label))?.props.disabled, true)
+  }
   nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
   assert.equal(submitted.deliveryMode, 'service-turn')

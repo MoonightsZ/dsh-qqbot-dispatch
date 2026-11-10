@@ -18,6 +18,8 @@ test('功能导航从模组清单生成并切换选中项', () => {
   assert.equal(view.children.length, 2)
   assert.equal(view.children[0].props['aria-current'], 'page')
   assert.equal(view.children[1].props['aria-current'], undefined)
+  assert.equal(view.children[0].props['aria-label'], 'CS2 赛事通知，已开启')
+  assert.equal(view.children[1].props['aria-label'], '偶尔闲聊，已关闭')
   view.children[1].props.onClick()
   assert.deepEqual(selected, ['casual-chat'])
 })

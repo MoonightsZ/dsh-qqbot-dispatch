@@ -66,7 +66,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 | 模组 | 用途 | 详细说明 |
 | --- | --- | --- |
 | CS2 赛事通知 | 按队伍、赛事等级和时间筛选赛程，向指定会话通知。 | [查看模组说明](./modules/cs2-matches/README.md) |
-| 偶尔闲聊 | 按概率、冷却时间和活跃状态，偶尔在指定会话发起聊天。 | [查看模组说明](./modules/casual-chat/README.md) |
+| 偶尔闲聊 | 按概率、小时冷却和安静时段，偶尔在指定会话发起聊天。 | [查看模组说明](./modules/casual-chat/README.md) |
 
 ### 全局投递配置
 
@@ -74,7 +74,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 | 模式 | CS2 赛事通知 | 偶尔闲聊 |
 | --- | --- | --- |
-| 服务回合投递（默认） | 固定内容由 Agent 尽量原样输出；选择“服务回合生成”时，Agent 填充模板并生成焦点分析。 | Agent 结合会话上下文生成开场白。 |
+| 服务回合投递（默认） | 固定赛事内容由 Agent 尽量原样输出；选择“AI 焦点分析”时，Agent 填充模板并生成分析。 | Agent 结合会话上下文生成开场白。 |
 | 直接发送 Markdown | 调用上游 Bot 实例的 `sendMarkdown` 发送固定赛事正文；模板和焦点分析暂不生效。 | 将选中的话题作为开场白原文发送。 |
 
 全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.deliveryMethod` 中。各投递方式的限制见下方「资料与限制」。
@@ -181,6 +181,9 @@ npm run build
 
 | 项目 | 借鉴点 |
 | --- | --- |
+| [dsh-context](https://github.com/bowenliang123/dsh-context) | 使用 DSH 语义主题变量组织紧凑的信息卡与控件状态。 |
+| [dsh-guizang-design](https://github.com/op7418/dsh-guizang-design) | 用清晰标题、细线和留白区分页面层级。 |
+| [dsh-media-desk](https://github.com/woniuniuniu/dsh-media-desk) | 响应式布局、统一的控件反馈与明暗主题适配。 |
 | [dsh-qqbot-expands](https://github.com/TONG5395/dsh-qqbot-expands) | 运行时包装上游入站方法，取得 Bot 实例。 |
 
 ## 免责声明与许可

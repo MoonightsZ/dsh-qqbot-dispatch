@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createChatProvider } from '../modules/casual-chat/provider.js'
@@ -15,12 +15,24 @@ test('偶尔闲聊作为独立模组出现，默认关闭且采用每日定点�
   assert.equal(chat.scheduleMode, 'cron')
   assert.deepEqual(chat.cron, ['0 19 * * *'])
   assert.equal(chat.providerLabel, '内置')
+  assert.equal(chat.values.cooldownHours, '72')
 })
 
-test('自动闲聊满足频率条件才提交服务回合，并记录上次发送时间', async () => {
+test('旧冷却天数配置换算为小时', async () => {
+  const statePath = join(mkdtempSync(join(tmpdir(), 'qqbot-chat-')), 'state.json')
+  writeFileSync(statePath, JSON.stringify({ features: { 'casual-chat': { values: { cooldownDays: '3' } } } }), 'utf8')
+  const runtime = createFeatureRuntime({ ctx: { get: () => undefined }, statePath })
+  const chat = (await runtime.snapshot()).features.find((entry) => entry.id === 'casual-chat')
+  assert.equal(chat.values.cooldownHours, '72')
+  writeFileSync(statePath, JSON.stringify({ features: { 'casual-chat': { values: { cooldownDays: '0' } } } }), 'utf8')
+  const clamped = (await runtime.snapshot()).features.find((entry) => entry.id === 'casual-chat')
+  assert.equal(clamped.values.cooldownHours, '24')
+})
+
+test('自动闲聊按小时冷却，满足条件后提交服务回合', async () => {
   const calls = []
   const provider = createChatProvider({ serviceTurn: { dispatch: async (value) => { calls.push(value) } }, random: () => 0.1 })
-  const feature = { values: { chancePercent: '30', cooldownDays: '3', quietStart: '22', quietEnd: '9', topics: '最近有什么好玩的事？' }, timeZone: 'Asia/Shanghai', lastSentAt: 0 }
+  const feature = { values: { chancePercent: '30', cooldownHours: '2', quietStart: '22', quietEnd: '9', topics: '最近有什么好玩的事？' }, timeZone: 'Asia/Shanghai', lastSentAt: 0 }
   const at = Date.parse('2026-11-09T11:00:00Z')
   const ctx = { sessionController: { list: async () => ({ items: [] }) } }
   const first = await provider({ feature, target: { sessionId: 'session-123' }, ctx, now: () => at, manual: false })
@@ -30,9 +42,11 @@ test('自动闲聊满足频率条件才提交服务回合，并记录上次发�
   assert.equal(calls[0].sessionId, 'session-123')
   assert.match(calls[0].text, /最近有什么好玩的事/)
   assert.match(calls[0].text, /简短/)
-  const second = await provider({ feature, target: { sessionId: 'session-123' }, ctx, now: () => at + 86_400_000, manual: false })
+  const second = await provider({ feature, target: { sessionId: 'session-123' }, ctx, now: () => at + 1 * 3_600_000, manual: false })
   assert.equal(second.sent, 0)
   assert.equal(calls.length, 1)
+  const third = await provider({ feature, target: { sessionId: 'session-123' }, ctx, now: () => at + 2 * 3_600_000, manual: false })
+  assert.equal(third.sent, 1)
 })
 
 test('全局 SDK 模式将选中的闲聊话题直接发送', async () => {
@@ -50,35 +64,32 @@ test('全局 SDK 模式将选中的闲聊话题直接发送', async () => {
   assert.equal(feature.lastSentAt, at)
 })
 
-test('安静时段、近期活动或未抽中时不发起自动闲聊', async () => {
+test('安静时段或未抽中时不发起自动闲聊', async () => {
   const calls = []
-  const feature = { values: { chancePercent: '30', cooldownDays: '3', quietStart: '22', quietEnd: '9' }, timeZone: 'Asia/Shanghai', lastSentAt: 0 }
+  const feature = { values: { chancePercent: '30', cooldownHours: '72', quietStart: '22', quietEnd: '9' }, timeZone: 'Asia/Shanghai', lastSentAt: 0 }
   const at = Date.parse('2026-11-09T15:00:00Z')
   const target = { sessionId: 'session-123' }
   const serviceTurn = { dispatch: async (value) => { calls.push(value) } }
   const quiet = createChatProvider({ serviceTurn, random: () => 0 })
   assert.equal((await quiet({ feature, target, ctx: {}, now: () => at, manual: false })).sent, 0)
-  const recent = createChatProvider({ serviceTurn, random: () => 0 })
-  const ctx = { sessionController: { list: async () => ({ items: [{ sessionId: 'session-123', updatedAt: new Date(at - 4 * 3_600_000 - 60_000).toISOString() }] }) } }
-  assert.equal((await recent({ feature, target, ctx, now: () => at - 4 * 3_600_000, manual: false })).sent, 0)
   const missed = createChatProvider({ serviceTurn, random: () => 0.9 })
   assert.equal((await missed({ feature, target, ctx: { sessionController: { list: async () => ({ items: [] }) } }, now: () => at - 4 * 3_600_000, manual: false })).sent, 0)
   assert.equal(calls.length, 0)
 })
 
-test('滚动七天内最多自动发起两次闲聊', async () => {
+test('近期活动和旧七天发送记录不再阻止自动闲聊', async () => {
   const calls = []
   const provider = createChatProvider({ serviceTurn: { dispatch: async (value) => { calls.push(value) } }, random: () => 0 })
   const at = Date.parse('2026-11-09T11:00:00Z')
   const feature = {
-    values: { chancePercent: '100', cooldownDays: '1', quietStart: '22', quietEnd: '9' },
+    values: { chancePercent: '100', cooldownHours: '24', quietStart: '22', quietEnd: '9' },
     timeZone: 'Asia/Shanghai', lastSentAt: at - 2 * 86_400_000,
     chatSentAt: [at - 5 * 86_400_000, at - 2 * 86_400_000],
   }
-  const ctx = { sessionController: { list: async () => ({ items: [] }) } }
+  const ctx = { sessionController: { list: async () => ({ items: [{ sessionId: 'session-123', updatedAt: new Date(at - 60_000).toISOString() }] }) } }
   const result = await provider({ feature, target: { sessionId: 'session-123' }, ctx, now: () => at, manual: false })
-  assert.equal(result.sent, 0)
-  assert.equal(calls.length, 0)
+  assert.equal(result.sent, 1)
+  assert.equal(calls.length, 1)
 })
 
 test('同一模组运行中不接受第二次并发检查', async () => {

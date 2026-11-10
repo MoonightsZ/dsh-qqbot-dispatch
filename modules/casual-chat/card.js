@@ -13,7 +13,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
       return `${String(hour ?? '19').padStart(2, '0')}:${String(minute ?? '0').padStart(2, '0')}`
     })())
     const [chancePercent, setChancePercent] = useState(String(values.chancePercent ?? '30'))
-    const [cooldownDays, setCooldownDays] = useState(String(values.cooldownDays ?? '3'))
+    const [cooldownHours, setCooldownHours] = useState(String(values.cooldownHours ?? '72'))
     const [quietStart, setQuietStart] = useState(String(values.quietStart ?? '22'))
     const [quietEnd, setQuietEnd] = useState(String(values.quietEnd ?? '9'))
     const [topics, setTopics] = useState(String(values.topics ?? ''))
@@ -30,7 +30,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
         scheduleMode: 'cron',
         cron: [`${minute} ${hour} * * *`],
         timeZone: feature.timeZone ?? 'Asia/Shanghai',
-        values: { chancePercent, cooldownDays, quietStart, quietEnd, topics },
+        values: { chancePercent, cooldownHours, quietStart, quietEnd, topics },
       }
     }
 
@@ -106,13 +106,13 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
             h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项'))),
           field('每日检查时间', h('input', { style: styles.input, type: 'time', value: checkTime, onChange: (event) => setCheckTime(event.target.value) })),
           field('触发概率（%）', numberInput(chancePercent, setChancePercent, 0, 100)),
-          field('发送冷却（天）', numberInput(cooldownDays, setCooldownDays, 1, 30)),
+          field('发送冷却（小时）', numberInput(cooldownHours, setCooldownHours, 1, 720)),
           field('安静时段开始（小时）', numberInput(quietStart, setQuietStart, 0, 23)),
           field('安静时段结束（小时）', numberInput(quietEnd, setQuietEnd, 0, 23)),
           field('话题提示（多个话题用 | 分隔）', h('input', { style: styles.input, value: topics, maxLength: 120, placeholder: '留空使用内置话题', onChange: (event) => setTopics(event.target.value) })),
         ),
         targetOptions.invalidSelected ? h('p', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
-        h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会避开最近 6 小时有活动的会话；“立即发起”会跳过这些限制。`),
+        h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会按概率、冷却和安静时段判断；“立即发起”会跳过这些条件。`),
         h('p', { style: styles.desc },
           (cronRules(feature.cron)[0] ?? '') !== (() => { const [hour, minute] = checkTime.split(':').map(Number); return `${minute} ${hour} * * *` })()
             ? '保存后更新下次检查时间'

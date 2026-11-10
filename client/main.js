@@ -155,18 +155,30 @@ function DispatchSessionsPage() {
     ? selectedFeatureId
     : features?.features[0]?.id
 
-  return h('div', { style: styles.page },
+  return h('div', { className: 'qqd-page', style: styles.page },
     h('style', null, [
+      '.qqd-page * { box-sizing: border-box; }',
+      '.qqd-page :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }',
+      '.qqd-page :is(button, input, select, textarea) { font-family: inherit; }',
+      '.qqd-page :is(button, input, select, textarea):disabled { opacity: .55; cursor: not-allowed; }',
+      '.qqd-page :is(input, select, textarea):focus-visible { border-color: var(--dsw-alias-brand-primary); }',
+      '.qqd-page option { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }',
+      'body[data-ds-dark-theme] .qqd-page { color-scheme: dark; }',
+      '.qqd-page .qqd-tab:hover:not(.qqd-tab-active), .qqd-page .qqd-feature-nav-item:hover { background: var(--dsw-alias-interactive-bg-hover); }',
+      '.qqd-page .qqd-btn:hover:not(:disabled), .qqd-page .qqd-ghost:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }',
+      '.qqd-page button:active:not(:disabled) { transform: translateY(1px); }',
       '.qqd-row:hover { background: var(--dsw-alias-bg-layer-2); }',
       '.qqd-row > td { transition: background .12s ease; }',
       '.qqd-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }',
-      '.qqd-tab:hover { color: var(--dsw-alias-label-primary); }',
-      '.qqd-tab-active:hover { color: var(--dsw-alias-brand-primary); }',
       '.qqd-feature-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; align-items: start; }',
       '.qqd-feature-nav { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 12px; min-width: 0; }',
       '.qqd-feature-nav-item:hover { background: var(--dsw-alias-bg-layer-2) !important; }',
       '.qqd-feature-nav-item:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }',
       '@container (max-width: 700px) { .qqd-feature-layout { grid-template-columns: minmax(0, 1fr); } .qqd-feature-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 4px; } .qqd-feature-nav-item { min-width: 140px; width: auto !important; flex: 0 0 auto; } }',
+      '.qqd-session-shell { container-type: inline-size; }',
+      '@container (max-width: 640px) { .qqd-session-table, .qqd-session-table tbody, .qqd-session-table tr { display: block; width: 100%; } .qqd-session-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .qqd-session-table tr { padding: 11px 14px; border-bottom: 1px solid var(--dsw-alias-border-l1); } .qqd-session-table tr:last-child { border-bottom: 0; } .qqd-session-table td { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 0 !important; border: 0 !important; text-align: right !important; white-space: normal !important; } .qqd-session-table td:first-child { display: block; padding-bottom: 9px !important; text-align: left !important; } .qqd-session-table td:not(:first-child)::before { content: attr(data-label); color: var(--dsw-alias-label-secondary); font-size: 11px; flex: none; } }',
+      '@container (max-width: 720px) { .qqd-page-head { flex-wrap: wrap; } .qqd-head-actions { width: 100%; flex-wrap: wrap; } .qqd-head-actions > button { flex: 1 1 auto; } .qqd-tabs { overflow-x: auto; } .qqd-settings-head { align-items: flex-start; } }',
+      '@media (prefers-reduced-motion: reduce) { .qqd-page *, .qqd-page *::before, .qqd-page *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }',
       '.qqd-slider { position: relative; flex: 1 1 auto; min-width: 120px; }',
       '.qqd-range { position: relative; height: 26px; }',
       '.qqd-range::before { content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 2px; border-radius: 2px; background: var(--dsw-alias-border-l2); }',
@@ -186,19 +198,22 @@ function DispatchSessionsPage() {
       'details[open] .qqd-chev { transform: rotate(90deg); }',
     ].join('\n')),
     h('div', { style: styles.inner },
-      h('div', { style: styles.header },
+      h('div', { className: 'qqd-page-head', style: styles.header },
         h('div', { style: styles.headerText },
+          h('span', { style: styles.eyebrow }, 'QQ BOT · 通知与会话'),
           h('h1', { style: styles.title }, 'QQ 机器人 · 通知助手'),
           h('p', { style: styles.subtitle }, '向 QQ 会话下发任务，管理可自定义的功能模组。'),
         ),
-        h('div', { style: { display: 'flex', gap: 8 } }, h('button', {
+        h('div', { className: 'qqd-head-actions', style: { display: 'flex', gap: 8 } }, h('button', {
           type: 'button',
+          className: 'qqd-ghost',
           style: { ...styles.ghostButton, ...(sessionLoading ? styles.disabledButton : {}) },
           disabled: sessionLoading,
           title: '重新读取本地 QQ 会话列表',
           onClick: () => { void refreshSessions(true) },
         }, sessionLoading ? '读取中…' : '刷新会话'), h('button', {
           type: 'button',
+          className: 'qqd-ghost',
           style: { ...styles.ghostButton, ...(refreshing ? styles.disabledButton : {}) },
           disabled: refreshing,
           title: '向 QQ 平台取每个群的群名，并把它写成会话标题',
@@ -219,21 +234,24 @@ function DispatchSessionsPage() {
       error === '' ? null : h('p', { style: styles.errorText }, `加载失败：${error}`),
       snapshot?.warning === undefined ? null : h('p', { style: styles.warnText }, `读取会话失败：${snapshot.warning}`),
 
-      h('div', { style: styles.tabs },
+      h('nav', { className: 'qqd-tabs', style: styles.tabs, 'aria-label': '通知助手页面' },
         h('button', {
           type: 'button',
+          'aria-current': tab === 'sessions' ? 'page' : undefined,
           className: tab === 'sessions' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
           style: tab === 'sessions' ? styles.tabActive : styles.tab,
           onClick: () => setTab('sessions'),
         }, `会话 ${sessions.length}`),
         h('button', {
           type: 'button',
+          'aria-current': tab === 'features' ? 'page' : undefined,
           className: tab === 'features' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
           style: tab === 'features' ? styles.tabActive : styles.tab,
           onClick: () => { setTab('features'); void refreshSessions() },
         }, `功能 ${features?.features.length ?? 0}`),
         h('button', {
           type: 'button',
+          'aria-current': tab === 'settings' ? 'page' : undefined,
           className: tab === 'settings' ? 'qqd-tab qqd-tab-active' : 'qqd-tab',
           style: tab === 'settings' ? styles.tabActive : styles.tab,
           onClick: () => setTab('settings'),
@@ -245,7 +263,7 @@ function DispatchSessionsPage() {
           sessions.length === 0
             ? h('div', { style: styles.empty },
               loading ? '读取中…' : '还没有 qqbot 创建过的会话，群里或私聊来一条消息后这里会出现。')
-            : h('div', { style: styles.panel }, h(SessionTable, {
+            : h('div', { className: 'qqd-session-shell', style: styles.panel }, h(SessionTable, {
               rows: sessions,
               rowBusy,
               onRefresh: refreshRow,
@@ -254,7 +272,7 @@ function DispatchSessionsPage() {
       ),
 
       tab !== 'features' ? null : h('div', null,
-        h(Section, { title: '功能', meta: features === null ? '' : `${features.features.length} 项` },
+        h(Section, { title: '功能模组', meta: features === null ? '' : `${features.features.filter((feature) => feature.enabled).length} / ${features.features.length} 已启用` },
           h('p', { style: { ...styles.desc, marginTop: 0, marginBottom: 10 } },
             '各模组独立保存开关与配置；通知投递方式由「配置」页统一控制。'),
           features === null
@@ -280,32 +298,33 @@ function DispatchSessionsPage() {
         ),
       ),
 
-      tab !== 'settings' ? null : h(Section, { title: '全局通知投递' },
+      tab !== 'settings' ? null : h(Section, { title: '全局通知投递', meta: '适用于所有模组' },
         features === null
           ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
-          : h('div', { style: styles.panel, padding: '16px 18px' },
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+          : h('div', { style: { ...styles.panel, padding: '18px 20px' } },
+            h('div', { className: 'qqd-settings-head', style: { display: 'flex', alignItems: 'center', gap: 16 } },
+              h('div', { style: { flex: 1, minWidth: 0 } },
+                h('strong', { style: styles.settingsTitle }, features.settings?.deliveryMethod === 'upstream-sdk' ? '直接发送 Markdown' : '服务回合投递'),
+                h('p', { style: styles.desc }, features.settings?.deliveryMethod === 'upstream-sdk'
+                  ? '由 QQ Bot 直接发送模组提供的文字；不经过 Agent 润色。'
+                  : '由目标会话的 Agent 处理通知，适合需要结合上下文生成内容的模组。'),
+              ),
               h(Switch, {
                 checked: features.settings?.deliveryMethod === 'upstream-sdk',
                 disabled: settingsBusy,
-                label: '直接调用上游 QQ Bot 发送 Markdown',
+                label: '切换直接发送 Markdown',
                 onChange: (enabled) => { void saveDeliveryMethod(enabled ? 'upstream-sdk' : 'service-turn') },
               }),
-              h('strong', null, features.settings?.deliveryMethod === 'upstream-sdk' ? '参考方式：直接发送 Markdown' : '现有方式：服务回合投递'),
             ),
-            h('p', { style: styles.desc }, '关闭：所有模组通过服务回合让 Agent 生成 QQ 回复。开启：捕获上游 QQ Bot 实例并调用 sendMarkdown；CS2 发送固定赛事正文，偶尔闲聊直接发送选中的话题。'),
-            h('p', { style: styles.warnText }, '直接发送模式需先在 QQ 会话收到消息以取得 Bot 实例；无法取得时会报错且不会记录为已发送。该模式不生成 CS2 焦点分析，QQ 送达仍受平台限制。'),
+            h('div', { style: features.settings?.deliveryMethod === 'upstream-sdk' ? styles.warningCallout : styles.note },
+              features.settings?.deliveryMethod === 'upstream-sdk'
+                ? '启动或重启后，先让 QQ Bot 收到一条消息再直接发送。CS2 焦点分析在此模式下不生效。'
+                : 'CS2 可选择固定赛事内容或 AI 焦点分析；偶尔闲聊会结合会话上下文生成开场白。'),
           ),
       ),
 
       h('div', { style: styles.footer },
-        h('div', null, '活跃 = 进程内有 Agent；休眠 = 进程内没有 Agent。通知按「配置」页选择的全局方式投递，实际送达受 QQ 平台限制。'),
-        h('div', null, '会话来自 QQ Bot 当前的 peer 映射；刷新会话只读取本地数据，同步群名会请求 QQ 平台并更新会话标题。'),
-        snapshot === null ? null : h('div', { style: styles.footerRow },
-          h('span', null, `appId ${snapshot.appId}`),
-          h('span', null, `mode ${snapshot.defaultMode}`),
-          h('span', { style: styles.mono }, snapshot.prefsPath),
-        ),
+        '“活跃”表示 Agent 当前在运行；“休眠”表示可在需要时恢复。实际送达仍受 QQ 平台限制。',
       ),
     ),
   )

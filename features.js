@@ -99,6 +99,16 @@ function readStateFile(entries, statePath) {
     for (const [id, feature] of Object.entries(parsed.features)) {
       if (feature === null || typeof feature !== 'object') continue
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
+      if (id === 'casual-chat') delete base.features[id].chatSentAt
+      if (id === 'casual-chat' && feature.values !== null && typeof feature.values === 'object') {
+        const values = { ...feature.values }
+        if (values.cooldownHours === undefined && values.cooldownDays !== undefined) {
+          const days = Number(values.cooldownDays)
+          values.cooldownHours = String(Number.isFinite(days) ? clamp(days, 1, 30) * 24 : 72)
+        }
+        delete values.cooldownDays
+        base.features[id].values = values
+      }
     }
     return base
   } catch {
@@ -327,7 +337,6 @@ export function createFeatureRuntime(options) {
           seen: feature.seen,
           tierCache: feature.tierCache,
           lastSentAt: feature.lastSentAt,
-          chatSentAt: feature.chatSentAt,
         }
         writeStateFile(statePath, latest)
       })

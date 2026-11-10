@@ -60,7 +60,7 @@ export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH,
         })),
       ),
       h('p', { style: styles.desc }, feature.description),
-      h('p', { style: styles.warnText }, '启用后将加载此模组的服务端代码；它与 DSH 在同一进程运行。请先检查来源和代码。'),
+      h('div', { style: styles.warningCallout }, '启用后将加载此模组的服务端代码；它与 DSH 在同一进程运行。请先检查来源和代码。'),
       h('label', { style: styles.field }, h('span', { style: styles.label }, '目标会话'),
         h('select', {
           style: styles.select, value: sessionId,
