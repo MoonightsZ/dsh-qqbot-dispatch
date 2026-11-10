@@ -77,7 +77,23 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 | 服务回合投递（默认） | 固定内容由 Agent 尽量原样输出；选择“服务回合生成”时，Agent 填充模板并生成焦点分析。 | Agent 结合会话上下文生成开场白。 |
 | 直接发送 Markdown | 调用上游 Bot 实例的 `sendMarkdown` 发送固定赛事正文；模板和焦点分析暂不生效。 | 将选中的话题作为开场白原文发送。 |
 
-全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.deliveryMethod` 中。各投递方式的限制见下表。
+全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.deliveryMethod` 中。各投递方式的限制见下方「资料与限制」。
+
+## 常见问题
+
+<details>
+<summary>为什么直接发送提示“尚未取得 QQ Bot 实例”？</summary>
+
+“直接发送 Markdown”需要先捕获 QQ Bot 的运行实例。启动或重启插件后，让机器人收到一条 QQ 消息即可；向目标群发送一条普通消息最方便，私聊会话则向机器人发送私聊消息。随后再尝试“立即发送”。每次进程重启后都需要重新收到一条消息。
+
+</details>
+
+<details>
+<summary>使用服务回合投递也需要先发消息吗？</summary>
+
+服务回合投递不依赖上述实例。若目标会话已由 QQ Bot 建立并记录，可直接选用；新群聊或私聊仍需先给机器人发消息，让目标会话出现在列表中。
+
+</details>
 
 ## 资料与限制
 
