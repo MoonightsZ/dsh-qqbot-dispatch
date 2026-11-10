@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { sessionTargetOptions } from '../client/session-options.js'
+import { featureTargetOptions, sessionTargetOptions } from '../client/session-options.js'
 
 test('目标选项优先展示群名并标明会话类型', () => {
   const result = sessionTargetOptions([
@@ -30,4 +30,15 @@ test('已确认不可用的群不进入下拉选项', () => {
   assert.equal(result.unavailableSelected, true)
   assert.deepEqual(result.options.map((option) => option.value), ['session-live', 'session-dead'])
   assert.equal(result.options[1].disabled, true)
+})
+
+test('模组留空时继承全局目标，并识别全局目标失效', () => {
+  const sessions = [{ sessionId: 'session-shared', scope: 'group', title: '通知群' }]
+  const inherited = featureTargetOptions(sessions, '', 'session-shared')
+  assert.equal(inherited.effectiveSessionId, 'session-shared')
+  assert.equal(inherited.defaultLabel, '通知群 · 群聊 · n-shared')
+  assert.equal(inherited.invalidSelected, false)
+  assert.equal(featureTargetOptions(sessions, 'session-own', 'session-shared').effectiveSessionId, 'session-own')
+  assert.equal(featureTargetOptions(sessions, '', 'session-gone').invalidSelected, true)
+  assert.match(featureTargetOptions(sessions, 'session-shared', 'session-gone').defaultLabel, /已失效/)
 })

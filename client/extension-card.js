@@ -1,11 +1,11 @@
 import { cronRules } from '../cron.js'
-import { sessionTargetOptions } from './session-options.js'
+import { featureTargetOptions } from './session-options.js'
 
 /** Metadata-only UI for extensions; never import a third-party browser card. */
 export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
   const { useState } = React
 
-  return function ExtensionCard({ feature, sessions, onSaved, onRun, onNotice, onRefreshSessions }) {
+  return function ExtensionCard({ feature, settings, sessions, onSaved, onRun, onNotice, onRefreshSessions }) {
     const [enabled, setEnabled] = useState(feature.enabled === true)
     const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
     const [values, setValues] = useState(feature.values ?? {})
@@ -13,10 +13,10 @@ export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH,
     const [intervalMinutes, setIntervalMinutes] = useState(String(feature.intervalMinutes ?? 60))
     const [cronText, setCronText] = useState(cronRules(feature.cron).join('\n'))
     const [busy, setBusy] = useState(false)
-    const targetOptions = sessionTargetOptions(sessions, sessionId)
+    const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
 
     const save = async (nextEnabled = enabled) => {
-      if (nextEnabled && sessionId === '') throw new Error('请先选择目标会话')
+      if (nextEnabled && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
       if (nextEnabled && targetOptions.invalidSelected) throw new Error('目标会话不可用，请刷新后重新选择')
       const next = await postJson(FEATURES_PATH, {
         id: feature.id,
@@ -66,8 +66,9 @@ export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH,
           style: styles.select, value: sessionId,
           onChange: (event) => setSessionId(event.target.value),
           onFocus: () => { void onRefreshSessions?.() },
-        }, h('option', { value: '' }, '选择会话…'),
+        }, h('option', { value: '' }, `使用全局默认（${targetOptions.defaultLabel}）`),
         ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label)))),
+      h('p', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),
       ...(feature.fields ?? []).map((field) => h('label', { key: field.key, style: styles.field },
         h('span', { style: styles.label }, field.label),
         h('input', {

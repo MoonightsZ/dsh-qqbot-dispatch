@@ -6,6 +6,7 @@ import { createFeatureNavigation } from './feature-navigation.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
 import { createExtensionCard } from './extension-card.js'
+import { createGlobalTargetSettings } from './global-target-settings.js'
 
 const h = React.createElement
 const { useCallback, useEffect, useRef, useState } = React
@@ -21,6 +22,7 @@ const FeatureNavigation = createFeatureNavigation({ h, styles })
 const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
 const ChatCard = createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
 const ExtensionCard = createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
+const GlobalTargetSettings = createGlobalTargetSettings({ React, h, styles, postJson, SETTINGS_PATH })
 
 function DispatchSessionsPage() {
   const [snapshot, setSnapshot] = useState(null)
@@ -298,29 +300,44 @@ function DispatchSessionsPage() {
         ),
       ),
 
-      tab !== 'settings' ? null : h(Section, { title: '全局通知投递', meta: '适用于所有模组' },
-        features === null
-          ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
-          : h('div', { style: { ...styles.panel, padding: '18px 20px' } },
-            h('div', { className: 'qqd-settings-head', style: { display: 'flex', alignItems: 'center', gap: 16 } },
-              h('div', { style: { flex: 1, minWidth: 0 } },
-                h('strong', { style: styles.settingsTitle }, features.settings?.deliveryMethod === 'upstream-sdk' ? '直接发送 Markdown' : '服务回合投递'),
-                h('p', { style: styles.desc }, features.settings?.deliveryMethod === 'upstream-sdk'
-                  ? '由 QQ Bot 直接发送模组提供的文字；不经过 Agent 润色。'
-                  : '由目标会话的 Agent 处理通知，适合需要结合上下文生成内容的模组。'),
+      tab !== 'settings' ? null : h('div', null,
+        h(Section, { title: '全局默认目标会话', meta: '未单独指定目标的模组会继承' },
+          features === null
+            ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
+            : h(GlobalTargetSettings, {
+              key: features.settings?.defaultTargetSessionId ?? '',
+              settings: features.settings,
+              features: features.features,
+              sessions,
+              onRefreshSessions: refreshSessions,
+              onSaved: (settings) => setFeatures((previous) => previous === null ? previous : { ...previous, settings }),
+              onNotice: setNotice,
+            }),
+        ),
+        h(Section, { title: '全局通知投递', meta: '适用于所有模组' },
+          features === null
+            ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
+            : h('div', { style: { ...styles.panel, padding: '18px 20px' } },
+              h('div', { className: 'qqd-settings-head', style: { display: 'flex', alignItems: 'center', gap: 16 } },
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                  h('strong', { style: styles.settingsTitle }, features.settings?.deliveryMethod === 'upstream-sdk' ? '直接发送 Markdown' : '服务回合投递'),
+                  h('p', { style: styles.desc }, features.settings?.deliveryMethod === 'upstream-sdk'
+                    ? '由 QQ Bot 直接发送模组提供的文字；不经过 Agent 润色。'
+                    : '由目标会话的 Agent 处理通知，适合需要结合上下文生成内容的模组。'),
+                ),
+                h(Switch, {
+                  checked: features.settings?.deliveryMethod === 'upstream-sdk',
+                  disabled: settingsBusy,
+                  label: '切换直接发送 Markdown',
+                  onChange: (enabled) => { void saveDeliveryMethod(enabled ? 'upstream-sdk' : 'service-turn') },
+                }),
               ),
-              h(Switch, {
-                checked: features.settings?.deliveryMethod === 'upstream-sdk',
-                disabled: settingsBusy,
-                label: '切换直接发送 Markdown',
-                onChange: (enabled) => { void saveDeliveryMethod(enabled ? 'upstream-sdk' : 'service-turn') },
-              }),
+              h('div', { style: features.settings?.deliveryMethod === 'upstream-sdk' ? styles.warningCallout : styles.note },
+                features.settings?.deliveryMethod === 'upstream-sdk'
+                  ? '启动或重启后，先让 QQ Bot 收到一条消息再直接发送。CS2 焦点分析在此模式下不生效。'
+                  : 'CS2 可选择固定赛事内容或 AI 焦点分析；偶尔闲聊会结合会话上下文生成开场白。'),
             ),
-            h('div', { style: features.settings?.deliveryMethod === 'upstream-sdk' ? styles.warningCallout : styles.note },
-              features.settings?.deliveryMethod === 'upstream-sdk'
-                ? '启动或重启后，先让 QQ Bot 收到一条消息再直接发送。CS2 焦点分析在此模式下不生效。'
-                : 'CS2 可选择固定赛事内容或 AI 焦点分析；偶尔闲聊会结合会话上下文生成开场白。'),
-          ),
+        ),
       ),
 
       h('div', { style: styles.footer },

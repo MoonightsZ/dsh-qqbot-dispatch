@@ -12,3 +12,10 @@ export function sessionTargetOptions(sessions, selectedId) {
   }
   return { options, invalidSelected, unavailableSelected }
 }
+
+export function featureTargetOptions(sessions, selectedId, defaultId = '') {
+  const effectiveSessionId = selectedId || defaultId
+  const result = sessionTargetOptions(sessions, effectiveSessionId)
+  const defaultLabel = defaultId === '' ? '未设置' : sessionTargetOptions(sessions, defaultId).options.find((option) => option.value === defaultId)?.label ?? '未设置'
+  return { ...result, effectiveSessionId, defaultLabel }
+}

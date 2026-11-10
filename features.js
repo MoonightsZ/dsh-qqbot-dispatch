@@ -69,10 +69,13 @@ function defaultFeature(entry) {
     target: { sessionId: '' },
     source: entry.defaults?.source ?? { id: 'custom', baseUrl: '' },
     intervalMinutes: entry.defaults?.intervalMinutes ?? 60,
-    scheduleMode: entry.defaults?.scheduleMode ?? 'interval',
-    cron: entry.defaults?.cron ?? [],
+    scheduleMode: entry.defaults?.scheduleMode ?? (entry.id === 'cs2-matches' ? 'cron' : 'interval'),
+    cron: entry.defaults?.cron ?? (entry.id === 'cs2-matches' ? ['0 18 * * *'] : []),
     timeZone: 'Asia/Shanghai',
-    ...(entry.id === 'cs2-matches' ? { deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE } : {}),
+    ...(entry.id === 'cs2-matches' ? {
+      deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE,
+      noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
+    } : {}),
     values: defaultValues(entry),
     lastRunAt: 0,
     lastResult: null,
@@ -84,7 +87,7 @@ function defaultFeature(entry) {
 function defaultState(entries) {
   return {
     version: 1,
-    settings: { deliveryMethod: 'service-turn' },
+    settings: { deliveryMethod: 'service-turn', defaultTargetSessionId: '' },
     features: Object.fromEntries(entries.map((entry) => [entry.id, defaultFeature(entry)])),
   }
 }
@@ -96,9 +99,12 @@ function readStateFile(entries, statePath) {
     const parsed = JSON.parse(readFileSync(statePath, 'utf8'))
     if (parsed === null || typeof parsed !== 'object' || parsed.features === null || typeof parsed.features !== 'object') return base
     base.settings.deliveryMethod = parsed.settings?.deliveryMethod === 'upstream-sdk' ? 'upstream-sdk' : 'service-turn'
+    base.settings.defaultTargetSessionId = typeof parsed.settings?.defaultTargetSessionId === 'string'
+      ? parsed.settings.defaultTargetSessionId.trim().slice(0, MAX_VALUE_LENGTH) : ''
     for (const [id, feature] of Object.entries(parsed.features)) {
       if (feature === null || typeof feature !== 'object') continue
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
+      if (id === 'cs2-matches' && feature.noticeMode === undefined) base.features[id].noticeMode = 'legacy'
       if (id === 'casual-chat') delete base.features[id].chatSentAt
       if (id === 'casual-chat' && feature.values !== null && typeof feature.values === 'object') {
         const values = { ...feature.values }
@@ -170,6 +176,9 @@ export function configFromInput(entry, input) {
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: source.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: validateCs2ServiceTemplate(source.serviceTemplate),
+      noticeMode: ['daily-digest', 'pre-match', 'legacy'].includes(source.noticeMode) ? source.noticeMode : 'daily-digest',
+      digestDay: source.digestDay === 'today' ? 'today' : 'tomorrow',
+      leadMinutes: clamp(Number(source.leadMinutes) || 60, 15, 360),
     } : {}),
   }
 }
@@ -202,6 +211,9 @@ function publicFeature(entry, feature, statePath, credential) {
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE,
+      noticeMode: feature.noticeMode ?? 'daily-digest',
+      digestDay: feature.digestDay === 'today' ? 'today' : 'tomorrow',
+      leadMinutes: feature.leadMinutes ?? 60,
     } : {}),
     values: feature.values ?? {},
     lastRunAt: feature.lastRunAt ?? 0,
@@ -260,9 +272,20 @@ export function createFeatureRuntime(options) {
   }
 
   function saveSettings(input) {
-    if (input?.deliveryMethod !== 'service-turn' && input?.deliveryMethod !== 'upstream-sdk') throw new Error('未知的通知投递方式')
+    const hasDeliveryMethod = Object.hasOwn(input ?? {}, 'deliveryMethod')
+    const hasTarget = Object.hasOwn(input ?? {}, 'defaultTargetSessionId')
+    if (!hasDeliveryMethod && !hasTarget) throw new Error('没有可保存的全局配置')
+    if (hasDeliveryMethod && input.deliveryMethod !== 'service-turn' && input.deliveryMethod !== 'upstream-sdk') throw new Error('未知的通知投递方式')
+    if (hasTarget && (typeof input.defaultTargetSessionId !== 'string' || input.defaultTargetSessionId.trim().length > MAX_VALUE_LENGTH)) throw new Error('目标会话无效')
     const state = read()
-    state.settings = { deliveryMethod: input.deliveryMethod }
+    if (hasTarget && input.defaultTargetSessionId.trim() === '' && entries.some((entry) => {
+      const feature = state.features[entry.id]
+      return feature?.enabled === true && !String(feature.target?.sessionId ?? '').trim()
+    })) {
+      throw new Error('已启用的模组仍使用全局默认目标，请先指定独立目标或关闭模组')
+    }
+    if (hasDeliveryMethod) state.settings.deliveryMethod = input.deliveryMethod
+    if (hasTarget) state.settings.defaultTargetSessionId = input.defaultTargetSessionId.trim()
     writeStateFile(statePath, state)
     return state.settings
   }
@@ -270,6 +293,8 @@ export function createFeatureRuntime(options) {
   async function save(id, input) {
     const entry = descriptor(id, entries)
     const submitted = configFromInput(entry, input)
+    const state = read()
+    if (submitted.enabled && !submitted.target.sessionId && !state.settings.defaultTargetSessionId) throw new Error('请先设置全局默认目标或选择模组目标会话')
 
     const credentials = ctx.get('credentials')
     const ref = credentialRefFor(id)
@@ -279,7 +304,6 @@ export function createFeatureRuntime(options) {
       else if (input?.clearCredential === true) await credentials.unset(ref)
     }
 
-    const state = read()
     const feature = state.features[id] ?? defaultFeature(entry)
     Object.assign(feature, submitted)
     state.features[id] = feature
@@ -311,7 +335,7 @@ export function createFeatureRuntime(options) {
     running.add(id)
     return Promise.resolve()
       .then(async () => {
-        const sessionId = String(feature.target?.sessionId ?? '').trim()
+        const sessionId = String(feature.target?.sessionId ?? '').trim() || state.settings.defaultTargetSessionId
         if (sessionId === '') throw new Error('未选择目标会话')
         const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend })
         result.matched = Number(outcome?.matched ?? 0)

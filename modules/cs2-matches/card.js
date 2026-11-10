@@ -1,5 +1,5 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
-import { sessionTargetOptions } from '../../client/session-options.js'
+import { featureTargetOptions } from '../../client/session-options.js'
 import { DEFAULT_CS2_SERVICE_TEMPLATE } from './template.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
@@ -142,6 +142,9 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
   const [intervalText, setIntervalText] = useState(String(feature.intervalMinutes ?? 60))
+  const [noticeMode, setNoticeMode] = useState(feature.noticeMode ?? 'legacy')
+  const [digestDay, setDigestDay] = useState(feature.digestDay === 'today' ? 'today' : 'tomorrow')
+  const [leadMinutesText, setLeadMinutesText] = useState(String(feature.leadMinutes ?? 60))
   const [deliveryMode, setDeliveryMode] = useState(feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct')
   const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
   const [scheduleMode, setScheduleMode] = useState(feature.scheduleMode === 'cron' ? 'cron' : 'interval')
@@ -167,6 +170,9 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     target: { sessionId },
     deliveryMode,
     serviceTemplate,
+    noticeMode,
+    digestDay,
+    leadMinutes: Number(leadMinutesText) || 60,
     scheduleMode,
     cron: cronEntries.map((entry) => entry.trim()).filter(Boolean),
     source: { id: sourceId, baseUrl: baseUrl.trim() },
@@ -181,6 +187,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   })
 
   const persist = async (nextEnabled, overrides) => {
+    if (nextEnabled !== false && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
     if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
     if (scheduleMode === 'cron' && describeCron(cronEntries) === null) throw new Error('Cron 规则无效')
     const next = await postJson(FEATURES_PATH, payload(nextEnabled, overrides))
@@ -210,7 +217,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     try {
       if (forceResend) await persist()
       else {
-        const savedTarget = sessionTargetOptions(sessions, feature.target?.sessionId ?? '')
+        const savedTarget = featureTargetOptions(sessions, feature.target?.sessionId ?? '', settings?.defaultTargetSessionId ?? '')
+        if (savedTarget.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
         if (savedTarget.invalidSelected) throw new Error(savedTarget.unavailableSelected ? '已保存的目标群不可用，请先同步群名确认' : '已保存的目标会话已失效，请重新选择并保存')
       }
       const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id, ...(forceResend ? { forceResend: true } : {}) })
@@ -231,8 +239,21 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const status = featureStatus(feature)
   const cronDescription = describeCron(cronEntries)
   const savedCron = JSON.stringify(splitCronRules(feature.cron)) === JSON.stringify(cronEntries.map((entry) => entry.trim()).filter(Boolean))
+  const scheduleChanged = scheduleMode !== feature.scheduleMode || (scheduleMode === 'cron'
+    ? !savedCron : Number(intervalText) !== (feature.intervalMinutes ?? 60))
   const tierOptions = feature.fields?.find((field) => field.kind === 'options')?.options ?? []
-  const targetOptions = sessionTargetOptions(sessions, sessionId)
+  const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
+
+  const selectNoticeMode = (mode) => {
+    setNoticeMode(mode)
+    if (mode === 'daily-digest') {
+      setScheduleMode('cron')
+      setCronEntries(['0 18 * * *'])
+    } else if (mode === 'pre-match') {
+      setScheduleMode('interval')
+      setIntervalText('15')
+    }
+  }
 
   const collapse = (event) => {
     event?.stopPropagation?.()
@@ -250,7 +271,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     ...children,
   )
 
-  const contentSection = configSection('04', '通知内容', '选择固定赛事正文，或在服务回合中生成焦点分析。',
+  const contentSection = configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中生成焦点分析。',
     h('div', { style: styles.field },
       h('span', { style: styles.label }, '内容生成方式'),
       h('div', { style: styles.segmented },
@@ -384,10 +405,11 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
             onChange: (event) => setSessionId(event.target.value),
             onFocus: () => { void onRefreshSessions?.() },
           },
-          h('option', { value: '' }, '选择会话…'),
+          h('option', { value: '' }, `使用全局默认（${targetOptions.defaultLabel}）`),
           ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
           h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项')),
         targetOptions.invalidSelected ? h('span', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
+        h('span', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),
       ),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '关注队伍（回车添加，留空=全部）'),
@@ -404,7 +426,38 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         h(TierRange, { options: tierOptions, tiers, onChange: setTiers }),
       ),
     )),
-    configSection('03', '检查计划', '设置自动检查赛事的时间。',
+    configSection('03', '通知方式', '先确定要通知哪一段赛程，再设置检查时间。',
+      h('div', { style: styles.segmented },
+        h('button', { type: 'button', style: noticeMode === 'daily-digest' ? styles.segOn : styles.seg,
+          onClick: () => selectNoticeMode('daily-digest') }, '每日汇总'),
+        h('button', { type: 'button', style: noticeMode === 'pre-match' ? styles.segOn : styles.seg,
+          onClick: () => selectNoticeMode('pre-match') }, '赛前提醒'),
+        feature.noticeMode === 'legacy' || noticeMode === 'legacy'
+          ? h('button', { type: 'button', style: noticeMode === 'legacy' ? styles.segOn : styles.seg,
+            onClick: () => selectNoticeMode('legacy') }, '旧版通知') : null,
+      ),
+      noticeMode === 'daily-digest'
+        ? h('div', { style: { ...styles.field, marginTop: 12 } },
+          h('span', { style: styles.label }, '汇总日期'),
+          h('select', { style: styles.select, value: digestDay, onChange: (event) => setDigestDay(event.target.value) },
+            h('option', { value: 'tomorrow' }, '明日赛程（推荐）'),
+            h('option', { value: 'today' }, '今日赛程')),
+          h('span', { style: styles.desc }, '按设定时区汇总所选日期中数据源当前可见的赛事，每个日期最多自动发送一次。'),
+        )
+        : noticeMode === 'pre-match'
+          ? h('div', { style: { ...styles.field, marginTop: 12 } },
+            h('span', { style: styles.label }, '最多提前提醒'),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              h('input', { style: { ...styles.input, flex: '0 1 110px' }, value: leadMinutesText,
+                type: 'number', min: 15, max: 360, onChange: (event) => setLeadMinutesText(event.target.value) }),
+              h('span', { style: styles.desc }, '分钟（15–360）'),
+            ),
+            h('span', { style: styles.desc }, '赛事进入提前量窗口后的首次检查发送一次；错过开赛不补发。'),
+          )
+          : h('div', { style: styles.warningCallout }, '旧版通知会发送数据源中所有可见的未来赛事及最近 6 小时的赛事，没有未来时间上限。建议改用每日汇总或赛前提醒。'),
+      h('p', { style: styles.desc }, '切换通知方式会填入建议检查计划；保存前仍可调整。'),
+    ),
+    configSection('04', '检查计划', '设置自动检查赛事的时间；它不决定通知包含的赛事范围。',
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '检查频率'),
         h('div', { style: styles.segmented },
@@ -449,10 +502,14 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
             h('div', { style: { color: C.secondary, fontSize: 11 } }, `时区：${feature.timeZone ?? 'Asia/Shanghai'}；日期与星期条件需同时满足`),
           ),
         h('span', { style: { color: C.secondary, fontSize: 11 } },
-          scheduleMode === 'cron' && !savedCron ? '保存后更新下次执行时间'
+          scheduleChanged ? '保存后更新下次执行时间'
             : feature.nextRunAt > 0
               ? `${enabled ? '下次执行' : '启用后下次计划执行'}：${scheduleMode === 'cron' ? formatZonedTime(feature.nextRunAt, feature.timeZone ?? 'Asia/Shanghai') : formatAbsolute(feature.nextRunAt)}`
               : '暂无下一次执行时间（请检查规则与时区）'),
+        noticeMode === 'daily-digest' && scheduleMode === 'interval'
+          ? h('span', { style: styles.warnText }, '每日汇总每个日期最多发送一次，建议改用每天一次的 Cron。') : null,
+        noticeMode === 'pre-match' && scheduleMode === 'cron'
+          ? h('span', { style: styles.warnText }, '赛前提醒需要频繁检查；Cron 检查过少可能错过提醒窗口。') : null,
       ),
     ),
     contentSection,
@@ -474,7 +531,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         type: 'button',
         style: { ...styles.ghostButton, ...(busy ? styles.disabledButton : {}) },
         disabled: busy,
-        title: '保存当前配置并重发所有匹配赛事，包括已通知过的赛事',
+        title: '保存当前配置并按通知方式重发匹配赛事，包括已通知过的赛事',
         onClick: () => { void run(true) },
       }, '立即发送'),
       h('span', { style: status.error ? styles.statusError : styles.statusLine }, status.text),

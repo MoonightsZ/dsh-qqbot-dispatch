@@ -99,11 +99,11 @@ function matchesTeams(watched, match) {
   return wanted.some((team) => team !== '' && candidates.some((candidate) => candidate.includes(team) || team.includes(candidate)))
 }
 
-function formatDayTime(timestamp) {
+function formatDayTime(timestamp, timeZone = 'Asia/Shanghai') {
   const date = new Date(timestamp * 1000)
   try {
     const parts = new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai',
+      timeZone,
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -150,7 +150,7 @@ function humanizeTournament(title, includeStage = true) {
 }
 
 /** One Markdown message per tournament, ordered by their earliest match. */
-function composeSections(matches, tiers) {
+function composeSections(matches, tiers, timeZone = 'Asia/Shanghai') {
   const groups = new Map()
   for (const match of matches) {
     const key = match.tournamentPage === '' ? match.tournament : match.tournamentPage
@@ -172,7 +172,7 @@ function composeSections(matches, tiers) {
       const text = [`【CS2 赛事提醒】${group.title}`]
       const matchupLines = []
       for (const match of group.matches) {
-        const when = formatDayTime(match.timestamp)
+        const when = formatDayTime(match.timestamp, timeZone)
         const stage = String(match.tournament).includes('#')
           ? `${String(match.tournament).split('#')[1].replace(/^Group\s+/i, '')} 组`
           : ''
@@ -195,6 +195,56 @@ function composeSections(matches, tiers) {
     })
 }
 
+function calendarDayKey(timestamp, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(timestamp))
+  const value = (type) => parts.find((part) => part.type === type)?.value
+  return `${value('year')}-${value('month')}-${value('day')}`
+}
+
+function digestDayKey(checkedAt, timeZone, digestDay) {
+  const today = calendarDayKey(checkedAt, timeZone)
+  if (digestDay === 'today') return today
+  const [year, month, day] = today.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10)
+}
+
+function composeDailyDigest(matches, tiers, dayKey, timeZone, part = '') {
+  const sections = composeSections(matches, tiers, timeZone)
+  const markdown = [
+    `# CS2 ${dayKey} 赛程${part}`, '', `共 ${matches.length} 场`, '',
+    ...sections.map((section) => section.markdown.split('\n\n---\n')[0].replace(/^# /, '## ')),
+    '', '---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0',
+  ].join('\n')
+  const text = [
+    `【CS2 ${dayKey} 赛程${part}】共 ${matches.length} 场`,
+    ...sections.map((section) => `【${section.title}】\n${section.text.split('\n').slice(1, -1).join('\n')}`),
+    '数据来源：Liquipedia · CC BY-SA 3.0',
+  ].join('\n')
+  return {
+    title: `CS2 ${dayKey} 赛程${part}`, markdown, text, matches,
+    matchupsMarkdown: sections.map((section) => section.matchupsMarkdown).join('\n'),
+    sourceUrl: 'https://liquipedia.net/counterstrike',
+  }
+}
+
+function composeDailyDigestSections(matches, tiers, dayKey, timeZone) {
+  const batches = []
+  let batch = []
+  for (const match of matches) {
+    const next = [...batch, match]
+    const candidate = composeDailyDigest(next, tiers, dayKey, timeZone)
+    if (batch.length > 0 && Math.max(candidate.markdown.length, candidate.text.length) > MAX_CHUNK_CHARS - 50) {
+      batches.push(batch)
+      batch = [match]
+    } else batch = next
+  }
+  if (batch.length > 0) batches.push(batch)
+  return batches.map((items, index) => composeDailyDigest(items, tiers, dayKey, timeZone,
+    batches.length > 1 ? `（${index + 1}/${batches.length}）` : ''))
+}
+
 /** The one match worth a picture card: the soonest followed team's match in the next day. */
 function pickFocus(matches, watched, nowMs) {
   const soon = matches.filter((match) => {
@@ -214,8 +264,8 @@ function pickFocus(matches, watched, nowMs) {
   return [...pool].sort((left, right) => left.timestamp - right.timestamp)[0]
 }
 
-function pruneSeen(feature) {
-  const floor = Date.now() - SEEN_RETENTION_MS
+function pruneSeen(feature, checkedAt) {
+  const floor = checkedAt - SEEN_RETENTION_MS
   if (feature.seen === undefined) feature.seen = {}
   for (const [key, at] of Object.entries(feature.seen)) {
     if (typeof at !== 'number' || at < floor) delete feature.seen[key]
@@ -240,9 +290,19 @@ export function createLiquipediaProvider(options = {}) {
       : (await readMatches())
     if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
 
+    const noticeMode = feature.noticeMode ?? 'legacy'
+    const timeZone = feature.timeZone ?? 'Asia/Shanghai'
+    const dayKey = noticeMode === 'daily-digest' ? digestDayKey(checkedAt, timeZone, feature.digestDay) : ''
+    const leadMinutes = Math.min(360, Math.max(15, Number(feature.leadMinutes) || 60))
     const watched = Array.isArray(feature.values?.teams) ? feature.values.teams : []
     const wantedTiers = Array.isArray(feature.values?.tiers) ? feature.values.tiers : []
-    const candidates = matches.filter((match) => match.timestamp * 1000 >= checkedAt - 6 * 60 * 60_000 && matchesTeams(watched, match))
+    const candidates = matches.filter((match) => {
+      const at = match.timestamp * 1000
+      if (!matchesTeams(watched, match)) return false
+      if (noticeMode === 'daily-digest') return calendarDayKey(at, timeZone) === dayKey
+      if (noticeMode === 'pre-match') return at > checkedAt && at <= checkedAt + leadMinutes * 60_000
+      return at >= checkedAt - 6 * 60 * 60_000
+    })
 
     const tiers = new Map()
     let selected = candidates
@@ -253,15 +313,24 @@ export function createLiquipediaProvider(options = {}) {
       selected = candidates.filter((match) => wantedTiers.includes(tiers.get(match.tournamentPage) ?? 'M'))
     }
 
-    pruneSeen(feature)
+    pruneSeen(feature, checkedAt)
     const fresh = selected
-      .filter((match) => forceResend || feature.seen[match.id] === undefined)
+      .filter((match) => forceResend || (noticeMode === 'daily-digest'
+        ? feature.seen[`digest:${dayKey}`] === undefined && feature.seen[`digestmatch:${dayKey}:${match.id}`] === undefined
+        : feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : match.id] === undefined))
       .sort((left, right) => left.timestamp - right.timestamp)
 
     if (fresh.length === 0) return { matched: selected.length, sent: 0 }
 
-    const sections = composeSections(fresh, tiers)
-    const markSeen = (section) => { for (const match of section.matches) feature.seen[match.id] = checkedAt }
+    const sections = noticeMode === 'daily-digest'
+      ? composeDailyDigestSections(fresh, tiers, dayKey, timeZone)
+      : composeSections(fresh, tiers, timeZone)
+    const markSeen = (section) => {
+      if (noticeMode === 'daily-digest') {
+        for (const match of section.matches) feature.seen[`digestmatch:${dayKey}:${match.id}`] = checkedAt
+      }
+      else for (const match of section.matches) feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : match.id] = checkedAt
+    }
     let channel = 'service-turn'
     for (const section of sections) {
       const outcome = await notificationDispatcher.dispatch({
@@ -275,6 +344,7 @@ export function createLiquipediaProvider(options = {}) {
       channel = outcome.channel
       markSeen(section)
     }
+    if (noticeMode === 'daily-digest') feature.seen[`digest:${dayKey}`] = checkedAt
 
     return { matched: selected.length, sent: fresh.length, channel }
   }

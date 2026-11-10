@@ -28,6 +28,27 @@ test('扩展模组使用通用卡片，关闭时不能立即运行', () => {
   assert.equal(runButton?.props.disabled, true)
 })
 
+test('三个模组均显示继承的全局默认目标', () => {
+  const sessions = [{ sessionId: 'session-shared', scope: 'group', title: '通知群' }]
+  const settings = { defaultTargetSessionId: 'session-shared', deliveryMethod: 'service-turn' }
+  const commonProps = { sessions, settings, open: true, onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {} }
+  const cards = [
+    createFeatureCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })({
+      ...commonProps, feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, target: { sessionId: '' }, source: { id: 'none' }, values: { teams: [], tiers: [] }, fields: [], credential: {} },
+    }),
+    createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })({
+      ...commonProps, feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: '' }, values: {} },
+    }),
+    createExtensionCard({ React, h, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })({
+      ...commonProps, feature: { id: 'sample-alert', label: '示例通知', enabled: false, target: { sessionId: '' }, fields: [], values: {} },
+    }),
+  ]
+  for (const card of cards) {
+    assert.match(JSON.stringify(card), /使用全局默认（通知群/)
+    assert.match(JSON.stringify(card), /会话设置在「配置」页/)
+  }
+})
+
 test('有會話資料時可繪製會話列表', () => {
   const { SessionTable } = createSessionTables({ h, C, styles, ...common })
   const view = SessionTable({
@@ -89,11 +110,59 @@ test('有功能資料時可繪製設定卡片', () => {
     node.children?.forEach(visit)
   }
   visit(view)
-  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '检查计划', '通知内容'])
+  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知方式', '检查计划', '通知内容'])
+  assert.match(JSON.stringify(view), /每日汇总/)
+  assert.match(JSON.stringify(view), /赛前提醒/)
   assert.match(JSON.stringify(view), /添加规则/)
   assert.match(JSON.stringify(view), /执行时间/)
   assert.match(JSON.stringify(view), /下次计划执行/)
   assert.match(JSON.stringify(view), /刷新选项/)
+})
+
+test('切换 CS2 通知方式会填入对应检查计划并保存', async () => {
+  const state = []
+  let cursor = 0
+  const StatefulReact = { useState: (initial) => {
+    const index = cursor++
+    if (!(index in state)) state[index] = initial
+    return [state[index], (next) => { state[index] = typeof next === 'function' ? next(state[index]) : next }]
+  } }
+  let saved
+  const done = new Promise((resolve) => { saved = resolve })
+  let payload
+  const FeatureCard = createFeatureCard({
+    React: StatefulReact, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (_path, body) => { payload = body; return { features: [{ id: body.id, enabled: body.enabled }] } },
+  })
+  const props = {
+    feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
+      noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
+      source: { id: 'none' }, target: { sessionId: 'session-1' }, values: { teams: [], tiers: [] }, fields: [],
+      scheduleMode: 'cron', cron: ['0 18 * * *'], credential: {} },
+    sessions: [{ sessionId: 'session-1', title: '通知群', scope: 'group' }], open: true,
+    onToggle: () => {}, onSaved: saved, onRun: () => {}, onNotice: () => {},
+  }
+  const render = () => { cursor = 0; return FeatureCard(props) }
+  const buttons = (view) => {
+    const found = []
+    const visit = (node) => {
+      if (Array.isArray(node)) { node.forEach(visit); return }
+      if (!node || typeof node !== 'object') return
+      if (node.type === 'button') found.push(node)
+      node.children?.forEach(visit)
+    }
+    visit(view)
+    return found
+  }
+  buttons(render()).find((item) => item.children.includes('赛前提醒')).props.onClick()
+  const view = render()
+  assert.match(JSON.stringify(view), /最多提前提醒/)
+  assert.match(JSON.stringify(view), /保存后更新下次执行时间/)
+  buttons(view).find((item) => item.children.includes('保存')).props.onClick()
+  await done
+  assert.equal(payload.noticeMode, 'pre-match')
+  assert.equal(payload.scheduleMode, 'interval')
+  assert.equal(payload.intervalMinutes, 15)
 })
 
 test('CS2 立即发送先保存当前配置再请求重发', async () => {

@@ -28,6 +28,89 @@ test('立即检查去重，立即发送重发已通知的匹配赛事', async ()
   assert.equal(sent.length, 1)
 })
 
+test('每日汇总只发送指定日期赛程，同一天重复检查不再发送', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const match = (id, hours, tournament = 'Test Cup') => ({
+    id, timestamp: Math.floor((now + hours * 3_600_000) / 1000),
+    teamA: id, teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament, tournamentPage: '', logoA: null, logoB: null, bestOf: 3,
+  })
+  const sent = []
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [match('today', 1), match('tomorrow-a', 16), match('tomorrow-b', 20, 'Other Cup'), match('later', 40)],
+    serviceTurn: { dispatch: async (item) => { sent.push(item) } },
+  })
+  const feature = {
+    source: { id: 'liquipedia' }, noticeMode: 'daily-digest', digestDay: 'tomorrow',
+    timeZone: 'Asia/Shanghai', values: { teams: [], tiers: [] }, seen: {},
+  }
+  const input = { feature, target: { sessionId: 'session-1' }, now: () => now }
+  assert.equal((await provider(input)).sent, 2)
+  assert.equal(sent.length, 1)
+  assert.match(sent[0].text, /Test Cup/)
+  assert.match(sent[0].text, /Other Cup/)
+  assert.doesNotMatch(sent[0].text, /today|later/)
+  assert.equal((await provider(input)).sent, 0)
+  assert.equal(sent.length, 1)
+  assert.equal((await provider({ ...input, forceResend: true })).sent, 2)
+  assert.equal(sent.length, 2)
+})
+
+test('赛前提醒只发送首次进入提前量窗口的赛事', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  let checkedAt = now
+  const match = (id, minutes) => ({
+    id, timestamp: Math.floor((now + minutes * 60_000) / 1000),
+    teamA: 'Team A', teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament: 'Test Cup', tournamentPage: '', logoA: null, logoB: null, bestOf: 3,
+  })
+  const sent = []
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [match('past', -1), match('soon', 30), match('edge', 60), match('later', 90)],
+    serviceTurn: { dispatch: async (item) => { sent.push(item) } },
+  })
+  const feature = {
+    source: { id: 'liquipedia' }, noticeMode: 'pre-match', leadMinutes: 60,
+    values: { teams: [], tiers: [] }, seen: {},
+  }
+  const input = { feature, target: { sessionId: 'session-1' }, now: () => checkedAt }
+  assert.equal((await provider(input)).sent, 2)
+  assert.equal((await provider(input)).sent, 0)
+  checkedAt += 45 * 60_000
+  assert.equal((await provider(input)).sent, 1)
+  assert.equal(sent.length, 2)
+})
+
+test('较长的每日汇总分段发送，部分失败后只补发未成功的赛事', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const matches = Array.from({ length: 25 }, (_, index) => ({
+    id: `match-${index}`, timestamp: Math.floor((now + 16 * 3_600_000 + index * 60_000) / 1000),
+    teamA: `Team-${index}-${'X'.repeat(80)}`, teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament: 'Long Cup', tournamentPage: '', logoA: null, logoB: null, bestOf: 3,
+  }))
+  const sent = []
+  let failSecond = true
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => matches,
+    upstreamSender: { send: async (item) => {
+      if (failSecond && sent.length === 1) { failSecond = false; throw new Error('第二段失败') }
+      sent.push(item)
+    } },
+  })
+  const feature = { source: { id: 'liquipedia' }, noticeMode: 'daily-digest', digestDay: 'tomorrow',
+    values: { teams: [], tiers: [] }, seen: {}, timeZone: 'Asia/Shanghai' }
+  const input = { feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'session-1' }, now: () => now }
+  await assert.rejects(provider(input), /第二段失败/)
+  const firstChunk = sent[0].text
+  assert.ok(firstChunk.length < 1800, `首段长度：${firstChunk.length}`)
+  assert.ok(Object.keys(feature.seen).some((key) => key.startsWith('digestmatch:')))
+  assert.equal(feature.seen['digest:2026-11-10'], undefined)
+  await provider(input)
+  assert.equal(feature.seen['digest:2026-11-10'], now)
+  assert.ok(sent.length > 1)
+  assert.doesNotMatch(sent.slice(1).map((item) => item.text).join('\n'), /Team-0-/)
+})
+
 test('运行时仅把显式重发选项传给 provider', async () => {
   const statePath = join(mkdtempSync(join(tmpdir(), 'qqbot-cs2-send-')), 'features.json')
   const runtime = createFeatureRuntime({ ctx: { get: () => undefined }, statePath })

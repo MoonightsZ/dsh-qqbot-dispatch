@@ -61,12 +61,16 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 ### 功能模组
 
-「功能」页采用模组导航与配置区；配置区较窄时导航移到上方。切换模组不会清空尚未保存的表单。
+「功能」页采用模组导航与配置区；配置区较窄时导航移到上方。切换模组不会清空尚未保存的表单。模组的「目标会话」留空时继承「配置」页的全局默认目标；也可为模组单独指定会话。
 
 | 模组 | 用途 | 详细说明 |
 | --- | --- | --- |
-| CS2 赛事通知 | 按队伍、赛事等级和时间筛选赛程，向指定会话通知。 | [查看模组说明](./modules/cs2-matches/README.md) |
+| CS2 赛事通知 | 按队伍和等级筛选赛程，提供每日汇总与赛前提醒。 | [查看模组说明](./modules/cs2-matches/README.md) |
 | 偶尔闲聊 | 按概率、小时冷却和安静时段，偶尔在指定会话发起聊天。 | [查看模组说明](./modules/casual-chat/README.md) |
+
+### 全局默认目标会话
+
+在「配置」页选择默认目标后，未单独指定目标的模组会继承该会话。页面会列出继承此设置的模组；修改默认目标会影响这些模组，已有独立目标保持不变。若已启用的模组仍在继承，须先为其指定独立目标或关闭模组，才能清空默认目标。
 
 ### 全局投递配置
 
@@ -77,7 +81,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 | 服务回合投递（默认） | 固定赛事内容由 Agent 尽量原样输出；选择“AI 焦点分析”时，Agent 填充模板并生成分析。 | Agent 结合会话上下文生成开场白。 |
 | 直接发送 Markdown | 调用上游 Bot 实例的 `sendMarkdown` 发送固定赛事正文；模板和焦点分析暂不生效。 | 将选中的话题作为开场白原文发送。 |
 
-全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.deliveryMethod` 中。各投递方式的限制见下方「资料与限制」。
+全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.defaultTargetSessionId` 和 `settings.deliveryMethod` 中。各投递方式的限制见下方「资料与限制」。
 
 ## 常见问题
 
@@ -101,7 +105,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 | 数据 | 位置或来源 |
 | --- | --- |
-| 功能状态与全局投递设置 | `~/.dsh-qqbot/dispatch-features.json` |
+| 功能状态、全局默认目标与投递设置 | `~/.dsh-qqbot/dispatch-features.json` |
 | 群名缓存、群可用状态 | `~/.dsh-qqbot/group-names.json`、`~/.dsh-qqbot/group-health.json` |
 | 数据源 API Key | 宿主凭证服务；不写入功能状态文件。 |
 | QQ Bot 的 AppID／AppSecret | profile 中的 `im-qqbot` 配置。 |

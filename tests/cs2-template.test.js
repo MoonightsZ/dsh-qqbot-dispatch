@@ -15,7 +15,8 @@ test('旧 CS2 配置默认固定内容，模板与全局投递方式可保存并
   const runtime = runtimeAt(path)
   const before = (await runtime.snapshot()).features.find((item) => item.id === 'cs2-matches')
   assert.equal(before.deliveryMode, 'direct')
-  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'service-turn' })
+  assert.equal(before.noticeMode, 'legacy')
+  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'service-turn', defaultTargetSessionId: '' })
   assert.match(before.serviceTemplate, /\{\{matchups\}\}/)
   assert.match(before.serviceTemplate, /\{\{focusAnalysis\}\}/)
 
@@ -31,6 +32,24 @@ test('旧 CS2 配置默认固定内容，模板与全局投递方式可保存并
   const upstream = await runtimeAt(path).snapshot()
   assert.equal(upstream.settings.deliveryMethod, 'upstream-sdk')
   assert.equal(upstream.features.find((item) => item.id === 'cs2-matches').deliveryMode, 'service-turn')
+})
+
+test('新 CS2 配置默认明日汇总，保存通知模式与提前量', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'qqbot-cs2-mode-')), 'state.json')
+  const runtime = runtimeAt(path)
+  const initial = (await runtime.snapshot()).features.find((item) => item.id === 'cs2-matches')
+  assert.equal(initial.noticeMode, 'daily-digest')
+  assert.equal(initial.digestDay, 'tomorrow')
+  assert.equal(initial.scheduleMode, 'cron')
+  assert.deepEqual(initial.cron, ['0 18 * * *'])
+  await runtime.save('cs2-matches', {
+    ...initial, noticeMode: 'pre-match', leadMinutes: 60,
+    scheduleMode: 'interval', intervalMinutes: 15,
+  })
+  const saved = (await runtimeAt(path).snapshot()).features.find((item) => item.id === 'cs2-matches')
+  assert.equal(saved.noticeMode, 'pre-match')
+  assert.equal(saved.leadMinutes, 60)
+  assert.equal(saved.intervalMinutes, 15)
 })
 
 test('服务回合模板必须包含对局和焦点分析占位符', async () => {

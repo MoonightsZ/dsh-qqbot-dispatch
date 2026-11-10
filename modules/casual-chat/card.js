@@ -1,5 +1,5 @@
 import { cronRules, formatZonedTime } from '../../cron.js'
-import { sessionTargetOptions } from '../../client/session-options.js'
+import { featureTargetOptions } from '../../client/session-options.js'
 
 export function createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
   const { useState } = React
@@ -18,7 +18,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
     const [quietEnd, setQuietEnd] = useState(String(values.quietEnd ?? '9'))
     const [topics, setTopics] = useState(String(values.topics ?? ''))
     const [busy, setBusy] = useState(false)
-    const targetOptions = sessionTargetOptions(sessions, sessionId)
+    const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
 
     const payload = (nextEnabled) => {
       const [hour, minute] = checkTime.split(':').map(Number)
@@ -35,6 +35,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
     }
 
     const persist = async (nextEnabled) => {
+      if (nextEnabled !== false && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
       if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(checkTime)) throw new Error('每日检查时间无效')
       const next = await postJson(FEATURES_PATH, payload(nextEnabled))
@@ -101,7 +102,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
         h('div', { style: styles.grid },
           field('目标会话', h('div', { style: { display: 'flex', gap: 6 } },
             h('select', { style: { ...styles.select, flex: 1, minWidth: 0 }, value: sessionId, onChange: (event) => setSessionId(event.target.value), onFocus: () => { void onRefreshSessions?.() } },
-              h('option', { value: '' }, '选择会话…'),
+              h('option', { value: '' }, `使用全局默认（${targetOptions.defaultLabel}）`),
               ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
             h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项'))),
           field('每日检查时间', h('input', { style: styles.input, type: 'time', value: checkTime, onChange: (event) => setCheckTime(event.target.value) })),
@@ -112,6 +113,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
           field('话题提示（多个话题用 | 分隔）', h('input', { style: styles.input, value: topics, maxLength: 120, placeholder: '留空使用内置话题', onChange: (event) => setTopics(event.target.value) })),
         ),
         targetOptions.invalidSelected ? h('p', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
+        h('p', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),
         h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会按概率、冷却和安静时段判断；“立即发起”会跳过这些条件。`),
         h('p', { style: styles.desc },
           (cronRules(feature.cron)[0] ?? '') !== (() => { const [hour, minute] = checkTime.split(':').map(Number); return `${minute} ${hour} * * *` })()
