@@ -1,5 +1,5 @@
 import React from 'react'
-import { C, MONO, styles } from './theme.js'
+import { C, styles } from './theme.js'
 import { createCommon } from './common.js'
 import { createSessionTables } from './tables.js'
 import { createFeatureNavigation } from './feature-navigation.js'
@@ -14,7 +14,7 @@ const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
 const FEATURES_PATH = '/qqbot-tool-dispatch/features'
 const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
 const { readJson, postJson, formatRelative, formatAbsolute, PanelIcon, Switch, StatusPill, Section } = createCommon({ h, C, styles })
-const { SessionTable, PeerTable } = createSessionTables({ h, C, MONO, styles, formatRelative, formatAbsolute, StatusPill })
+const { SessionTable } = createSessionTables({ h, C, styles, formatRelative, formatAbsolute, StatusPill })
 const FeatureNavigation = createFeatureNavigation({ h, styles })
 const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
 const ChatCard = createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
@@ -134,7 +134,6 @@ function DispatchSessionsPage() {
   }, [notice])
 
   const sessions = snapshot?.sessions ?? []
-  const entries = snapshot?.entries ?? []
   const activeFeatureId = features?.features.some((feature) => feature.id === selectedFeatureId)
     ? selectedFeatureId
     : features?.features[0]?.id
@@ -228,9 +227,6 @@ function DispatchSessionsPage() {
               rowBusy,
               onRefresh: refreshRow,
             })),
-        ),
-        entries.length === 0 ? null : h(Section, { title: '已记录的 peer 映射', meta: `${entries.length} 条` },
-          h('div', { style: styles.panel }, h(PeerTable, { rows: entries })),
         ),
       ),
 

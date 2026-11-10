@@ -1,4 +1,4 @@
-export function createSessionTables({ h, C, MONO, styles, formatRelative, formatAbsolute, StatusPill }) {
+export function createSessionTables({ h, C, styles, formatRelative, formatAbsolute, StatusPill }) {
 function SessionTable({ rows, rowBusy, onRefresh }) {
   return h('table', { style: styles.table },
     h('thead', null, h('tr', null,
@@ -38,23 +38,5 @@ function SessionTable({ rows, rowBusy, onRefresh }) {
   )
 }
 
-function PeerTable({ rows }) {
-  return h('table', { style: styles.table },
-    h('thead', null, h('tr', null,
-      h('th', { style: styles.th }, '会话键'),
-      h('th', { style: styles.th }, 'sessionId'),
-      h('th', { style: styles.th }, '来源'),
-      h('th', { style: styles.th }, '状态'),
-    )),
-    h('tbody', null, rows.map((row) => h('tr', { key: row.sessionKey },
-      h('td', { style: { ...styles.td, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all' } }, row.sessionKey),
-      h('td', { style: styles.td }, h('div', { style: styles.rowSub }, row.sessionId)),
-      h('td', { style: styles.td }, row.resolvedFrom),
-      h('td', { style: styles.td }, row.groupStatus === 'unavailable' ? '群不可用' : !row.exists ? '会话不存在' : h(StatusPill, { live: row.hasSession })),
-    ))),
-  )
-}
-
-
-return { SessionTable, PeerTable }
+return { SessionTable }
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { C, MONO, styles } from '../client/theme.js'
+import { C, styles } from '../client/theme.js'
 import { createCommon } from '../client/common.js'
 import { createSessionTables } from '../client/tables.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
@@ -16,7 +16,7 @@ const React = {
 const common = createCommon({ h, C, styles })
 
 test('有會話資料時可繪製會話列表', () => {
-  const { SessionTable, PeerTable } = createSessionTables({ h, C, MONO, styles, ...common })
+  const { SessionTable } = createSessionTables({ h, C, styles, ...common })
   const view = SessionTable({
     rows: [{ sessionId: 'session-123', title: '測試群', scope: 'group', groupOpenid: 'openid', hasSession: true, updatedAt: Date.now() }],
     rowBusy: '',
@@ -24,12 +24,10 @@ test('有會話資料時可繪製會話列表', () => {
   })
   assert.equal(view.type, 'table')
   assert.match(JSON.stringify(view), /刷新群名/)
-  const peers = PeerTable({ rows: [{ sessionKey: 'qqbot:app:group:openid', sessionId: 'session-missing', resolvedFrom: 'prefs', hasSession: false, exists: false }] })
-  assert.match(JSON.stringify(peers), /会话不存在/)
 })
 
 test('群不可用的会话仍可见并提示重新同步', () => {
-  const { SessionTable } = createSessionTables({ h, C, MONO, styles, ...common })
+  const { SessionTable } = createSessionTables({ h, C, styles, ...common })
   const view = SessionTable({
     rows: [{ sessionId: 'session-dead', scope: 'group', groupOpenid: 'openid', groupStatus: 'unavailable', title: '旧群', hasSession: false }],
     rowBusy: '', onRefresh: () => {},
