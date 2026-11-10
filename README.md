@@ -80,3 +80,11 @@ npm install --legacy-peer-deps
 npm test
 npm run build
 ```
+
+## 免责声明与许可
+
+本项目是社区独立开发的非官方插件，与腾讯、DeepSeek 及 `@tencent-connect/dsh-qqbot` 的维护方无隶属关系，不代表其官方立场。
+
+使用本插件即表示你已阅读并遵守 QQ 开放平台的相关规则。因违反平台规则而产生的后果，由使用者自行承担。
+
+本项目采用 [MIT 许可证](./LICENSE) 开源。软件按许可证“原样”提供，不附带任何明示或默示担保。
