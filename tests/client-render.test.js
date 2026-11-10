@@ -81,6 +81,15 @@ test('有功能資料時可繪製設定卡片', () => {
     sessions: [], open: true, onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {},
   })
   assert.equal(view.type, 'div')
+  const headings = []
+  const visit = (node) => {
+    if (Array.isArray(node)) { node.forEach(visit); return }
+    if (node === null || typeof node !== 'object') return
+    if (node.type === 'h3') headings.push(node.children.join(''))
+    node.children?.forEach(visit)
+  }
+  visit(view)
+  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '检查计划', '通知内容'])
   assert.match(JSON.stringify(view), /添加规则/)
   assert.match(JSON.stringify(view), /执行时间/)
   assert.match(JSON.stringify(view), /下次计划执行/)
