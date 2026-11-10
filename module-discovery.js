@@ -14,7 +14,7 @@ function validateManifest(raw, id) {
   if (!Array.isArray(raw.fields) || raw.fields.length > 20) throw new Error('module.json 的 fields 无效')
   const keys = new Set()
   const fields = raw.fields.map((field) => {
-    if (field === null || typeof field !== 'object' || !FIELD_KEY.test(field.key) || ['constructor', 'prototype'].includes(field.key) || keys.has(field.key) || !['text', 'list', 'options'].includes(field.kind)) {
+    if (field === null || typeof field !== 'object' || !FIELD_KEY.test(field.key) || ['constructor', 'prototype'].includes(field.key) || keys.has(field.key) || !(['text', 'list', 'options'].includes(field.kind) || (id === 'casual-chat' && field.key === 'topics' && field.kind === 'topics'))) {
       throw new Error('module.json 包含无效或重复的配置字段')
     }
     keys.add(field.key)

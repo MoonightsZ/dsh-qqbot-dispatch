@@ -22,6 +22,7 @@ import { cronMatches, cronRules, describeCron, nextCronTime, parseCronList } fro
 import { definition as cs2Matches } from './modules/cs2-matches/definition.js'
 import { definition as casualChat } from './modules/casual-chat/definition.js'
 import { DEFAULT_CS2_SERVICE_TEMPLATE, validateCs2ServiceTemplate } from './modules/cs2-matches/template.js'
+import { normalizeTopics } from './modules/casual-chat/topics.js'
 export { cronMatches, parseCronList } from './cron.js'
 
 /** State document shared by every feature toggle. */
@@ -113,6 +114,7 @@ function readStateFile(entries, statePath) {
           values.cooldownHours = String(Number.isFinite(days) ? clamp(days, 1, 30) * 24 : 72)
         }
         delete values.cooldownDays
+        values.topics = normalizeTopics(values.topics)
         base.features[id].values = values
       }
     }
@@ -149,7 +151,9 @@ export function configFromInput(entry, input) {
   const values = {}
   for (const field of entry.fields) {
     const raw = submitted[field.key]
-    if (field.kind === 'list') {
+    if (field.kind === 'topics') {
+      values[field.key] = normalizeTopics(raw)
+    } else if (field.kind === 'list') {
       const list = (Array.isArray(raw) ? raw : String(raw ?? '').split(/[,，;；\s]+/))
         .map((item) => String(item).trim())
         .filter((item) => item !== '' && item.length <= MAX_VALUE_LENGTH)
@@ -218,6 +222,7 @@ function publicFeature(entry, feature, statePath, credential) {
     values: feature.values ?? {},
     lastRunAt: feature.lastRunAt ?? 0,
     lastResult: feature.lastResult ?? null,
+    ...(entry.id === 'casual-chat' ? { lastTopicId: feature.lastTopicId ?? '' } : {}),
     statePath,
   }
 }
@@ -361,6 +366,7 @@ export function createFeatureRuntime(options) {
           seen: feature.seen,
           tierCache: feature.tierCache,
           lastSentAt: feature.lastSentAt,
+          ...(id === 'casual-chat' ? { lastTopicId: feature.lastTopicId } : {}),
         }
         writeStateFile(statePath, latest)
       })

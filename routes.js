@@ -1,4 +1,5 @@
 import { readPrefs, sessionKey } from './session-resolver.js'
+import { listTopicModels, recommendTopics } from './modules/casual-chat/recommend.js'
 
 function describeFailure(error) {
   const code = error?.code ?? error?.name
@@ -16,6 +17,8 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
     const FEATURES_PATH = '/qqbot-tool-dispatch/features'
     const SETTINGS_PATH = '/qqbot-tool-dispatch/settings'
     const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
+    const TOPIC_MODELS_PATH = '/qqbot-tool-dispatch/chat/models'
+    const TOPIC_RECOMMEND_PATH = '/qqbot-tool-dispatch/chat/recommend'
     const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
     const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
     const GROUP_CACHE_MS = 10 * 60 * 1000
@@ -327,6 +330,31 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
           try {
             const body = await readJsonBody(req)
             sendJson(res, 200, { settings: features.saveSettings(body) })
+          } catch (error) {
+            sendJson(res, 400, { error: describeFailure(error) })
+          }
+        },
+      }),
+      webServer.register({
+        kind: 'exact', path: TOPIC_MODELS_PATH,
+        handler: async (req, res) => {
+          if (!guard(req, res)) return
+          sendJson(res, 200, { models: await listTopicModels(ctx.get('llm')) })
+        },
+      }),
+      webServer.register({
+        kind: 'exact', path: TOPIC_RECOMMEND_PATH,
+        handler: async (req, res) => {
+          if (!sameOrigin(req)) return sendJson(res, 403, { error: 'forbidden' })
+          if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' })
+          try {
+            const input = await readJsonBody(req)
+            const llm = ctx.get('llm')
+            const models = await listTopicModels(llm)
+            const provider = String(input.provider ?? '')
+            const model = String(input.model ?? '')
+            if (!models.some((item) => item.provider === provider && item.model === model)) throw new Error('推荐模型不可用，请刷新模型列表')
+            sendJson(res, 200, { topics: await recommendTopics(llm, { keyword: input.keyword, provider, model }) })
           } catch (error) {
             sendJson(res, 400, { error: describeFailure(error) })
           }

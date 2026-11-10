@@ -8,6 +8,28 @@ import { registerDispatchRoutes } from '../routes.js'
 import { createSessionResolver } from '../session-resolver.js'
 import { createGroupHealthStore } from '../group-health.js'
 
+test('闲聊推荐只接受已发现模型，拒绝跨来源并返回候选', async () => {
+  const handlers = new Map()
+  const llm = {
+    listProviders: () => [{ id: 'one', name: '一' }],
+    listModels: async () => [{ id: 'a', name: '模型 A' }],
+    stream: async function * () { yield { type: 'text-delta', text: '["聊聊 CS2？"]' }; yield { type: 'finish', reason: { kind: 'stop' } } },
+  }
+  const ctx = { inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }), get: (name) => name === 'llm' ? llm : undefined }
+  registerDispatchRoutes(ctx, { resolver: createSessionResolver({ appId: 'app' }), groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} }, features: {}, defaultMode: 'queue', qqbotApi: {}, loadOptionalPatches: () => [] })
+  const call = async (path, data, origin) => {
+    const req = Readable.from([Buffer.from(JSON.stringify(data))])
+    req.method = 'POST'; req.headers = { host: 'localhost:3000', ...(origin ? { origin } : {}) }
+    let status; let body
+    await handlers.get(path)(req, { writeHead: (code) => { status = code }, end: (value) => { body = JSON.parse(value) } })
+    return { status, body }
+  }
+  const path = '/qqbot-tool-dispatch/chat/recommend'
+  assert.equal((await call(path, { keyword: 'CS2', provider: 'one', model: 'a' }, 'https://other.example')).status, 403)
+  assert.equal((await call(path, { keyword: 'CS2', provider: 'one', model: 'unknown' })).status, 400)
+  assert.deepEqual((await call(path, { keyword: 'CS2', provider: 'one', model: 'a' })).body.topics, ['聊聊 CS2？'])
+})
+
 test('功能設定路由拒絕跨來源的寫入', async () => {
   const handlers = new Map()
   let saved = false

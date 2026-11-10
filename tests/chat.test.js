@@ -29,6 +29,17 @@ test('旧冷却天数配置换算为小时', async () => {
   assert.equal(clamped.values.cooldownHours, '24')
 })
 
+test('旧话题文本读取时迁移为列表，保存多标签话题不拆分句子', async () => {
+  const statePath = join(mkdtempSync(join(tmpdir(), 'qqbot-chat-')), 'state.json')
+  writeFileSync(statePath, JSON.stringify({ features: { 'casual-chat': { values: { topics: '今天怎么样？|想聊 CS2 比赛吗？' } } } }), 'utf8')
+  const runtime = createFeatureRuntime({ ctx: { get: () => undefined }, statePath })
+  const old = (await runtime.snapshot()).features.find((entry) => entry.id === 'casual-chat')
+  assert.deepEqual(old.values.topics.map((topic) => topic.text), ['今天怎么样？', '想聊 CS2 比赛吗？'])
+  await runtime.save('casual-chat', { target: { sessionId: 'session-123' }, source: { id: 'none' }, values: { topics: [{ id: 'one', text: '想聊 CS2 比赛吗？', tags: ['CS2', '赛事'], enabled: true }] } })
+  const saved = (await runtime.snapshot()).features.find((entry) => entry.id === 'casual-chat')
+  assert.deepEqual(saved.values.topics[0].tags, ['CS2', '赛事'])
+})
+
 test('自动闲聊按小时冷却，满足条件后提交服务回合', async () => {
   const calls = []
   const provider = createChatProvider({ serviceTurn: { dispatch: async (value) => { calls.push(value) } }, random: () => 0.1 })
@@ -62,6 +73,44 @@ test('全局 SDK 模式将选中的闲聊话题直接发送', async () => {
   assert.equal(result.channel, 'qq-sdk')
   assert.deepEqual(sent, [{ sessionId: 'session-123', text: '最近有什么好玩的事？' }])
   assert.equal(feature.lastSentAt, at)
+})
+
+test('发送成功后避开上一话题，失败时不更新记录', async () => {
+  const sent = []
+  let fail = false
+  const provider = createChatProvider({ upstreamSender: { send: async ({ text }) => { if (fail) throw new Error('发送失败'); sent.push(text) } }, random: () => 0 })
+  const feature = { values: { topics: [
+    { id: 'a', text: '话题 A', tags: ['游戏'], enabled: true },
+    { id: 'b', text: '话题 B', tags: ['游戏'], enabled: true },
+  ] }, lastSentAt: 0 }
+  const options = { feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'session-123' }, now: () => 1000, manual: true }
+  await provider(options)
+  assert.equal(feature.lastTopicId, 'a')
+  fail = true
+  await assert.rejects(provider(options), /发送失败/)
+  assert.equal(feature.lastTopicId, 'a')
+  fail = false
+  await provider(options)
+  assert.deepEqual(sent, ['话题 A', '话题 B'])
+  assert.equal(feature.lastTopicId, 'b')
+})
+
+test('话题池全部禁用时跳过闲聊', async () => {
+  const provider = createChatProvider({ upstreamSender: { send: async () => { throw new Error('不应发送') } }, random: () => 0 })
+  const result = await provider({ feature: { values: { topics: [{ id: 'a', text: '禁用', tags: [], enabled: false }] } }, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'session-123' }, now: () => 1000, manual: true })
+  assert.equal(result.sent, 0)
+  assert.match(result.warning, /没有启用的话题/)
+})
+
+test('运行结果持久化上次抽中的话题', async () => {
+  const statePath = join(mkdtempSync(join(tmpdir(), 'qqbot-chat-')), 'state.json')
+  const runtime = createFeatureRuntime({ ctx: { get: () => undefined }, statePath })
+  await runtime.save('casual-chat', { target: { sessionId: 'session-123' }, source: { id: 'none' }, values: { topics: [{ id: 'a', text: '话题 A', tags: [], enabled: true }] } })
+  runtime.registerProvider('casual-chat', createChatProvider({ upstreamSender: { send: async () => {} }, random: () => 0 }))
+  runtime.saveSettings({ deliveryMethod: 'upstream-sdk' })
+  await runtime.run('casual-chat', { manual: true })
+  const chat = (await runtime.snapshot()).features.find((entry) => entry.id === 'casual-chat')
+  assert.equal(chat.lastTopicId, 'a')
 })
 
 test('安静时段或未抽中时不发起自动闲聊', async () => {

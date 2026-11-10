@@ -8,7 +8,7 @@
     { "key": "cooldownHours", "kind": "text", "label": "发送冷却小时数", "default": "72" },
     { "key": "quietStart", "kind": "text", "label": "安静时段开始", "default": "22" },
     { "key": "quietEnd", "kind": "text", "label": "安静时段结束", "default": "9" },
-    { "key": "topics", "kind": "text", "label": "话题提示", "default": "" }
+    { "key": "topics", "kind": "topics", "label": "话题池", "default": [] }
   ],
   "defaults": { "source": { "id": "none" }, "intervalMinutes": 1440, "scheduleMode": "cron", "cron": ["0 19 * * *"] }
 }

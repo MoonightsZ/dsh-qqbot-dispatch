@@ -10,6 +10,6 @@ export const definition = {
     { key: 'cooldownHours', kind: 'text', default: '72' },
     { key: 'quietStart', kind: 'text', default: '22' },
     { key: 'quietEnd', kind: 'text', default: '9' },
-    { key: 'topics', kind: 'text', default: '' },
+    { key: 'topics', kind: 'topics', default: [] },
   ],
 }

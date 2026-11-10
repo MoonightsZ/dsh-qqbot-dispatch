@@ -1,7 +1,8 @@
 import { cronRules, formatZonedTime } from '../../cron.js'
 import { featureTargetOptions } from '../../client/session-options.js'
+import { DEFAULT_TOPICS, MAX_TOPICS, normalizeTopics } from './topics.js'
 
-export function createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
+export function createChatCard({ React, h, C, styles, formatRelative, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, TOPIC_MODELS_PATH, TOPIC_RECOMMEND_PATH, Switch }) {
   const { useState } = React
 
   function ChatCard({ feature, settings, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
@@ -16,7 +17,15 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
     const [cooldownHours, setCooldownHours] = useState(String(values.cooldownHours ?? '72'))
     const [quietStart, setQuietStart] = useState(String(values.quietStart ?? '22'))
     const [quietEnd, setQuietEnd] = useState(String(values.quietEnd ?? '9'))
-    const [topics, setTopics] = useState(String(values.topics ?? ''))
+    const [topics, setTopics] = useState(normalizeTopics(values.topics))
+    const [keyword, setKeyword] = useState('')
+    const [suggestionKeyword, setSuggestionKeyword] = useState('')
+    const [suggestions, setSuggestions] = useState([])
+    const [selectedSuggestions, setSelectedSuggestions] = useState([])
+    const [suggesting, setSuggesting] = useState(false)
+    const [suggestError, setSuggestError] = useState('')
+    const [modelLabel, setModelLabel] = useState('')
+    const [tagFilter, setTagFilter] = useState('')
     const [busy, setBusy] = useState(false)
     const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
 
@@ -63,6 +72,8 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
         const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
         onNotice(result?.error
           ? { kind: 'error', text: `${feature.label} 发起失败：${result.error}` }
+          : result?.warning
+            ? { kind: 'error', text: `${feature.label} ${result.warning}` }
           : result?.channel === 'qq-sdk'
             ? { kind: 'ok', text: `${feature.label} 已调用上游 QQ Bot 发送话题` }
             : { kind: 'ok', text: `${feature.label} 已提交服务回合，QQ 送达待确认` })
@@ -74,12 +85,55 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
       }
     }
 
-    const field = (label, input) => h('label', { style: styles.field },
+    const field = (label, input, style) => h('label', { style: { ...styles.field, ...style } },
       h('span', { style: styles.label }, label), input)
     const numberInput = (value, setter, min, max) => h('input', {
       style: styles.input, type: 'number', min, max, value,
       onChange: (event) => setter(event.target.value),
     })
+
+    const updateTopic = (id, patch) => setTopics((current) => current.map((topic) => topic.id === id ? { ...topic, ...patch } : topic))
+    const addTopic = () => setTopics((current) => current.length >= MAX_TOPICS ? current : [...current, { id: `topic-${Date.now()}-${Math.random().toString(36).slice(2)}`, text: '', tags: [], sourceKeyword: '', enabled: true }])
+    const recommend = async () => {
+      setSuggesting(true)
+      setSuggestError('')
+      try {
+        const theme = keyword.trim()
+        if (!theme || theme.length > 80) throw new Error('请输入不超过 80 字的主题词')
+        const { models } = await readJson(TOPIC_MODELS_PATH)
+        if (!models?.length) throw new Error('没有可用模型，请先在 DSH 配置模型')
+        const chosen = models[0]
+        const result = await postJson(TOPIC_RECOMMEND_PATH, { keyword: theme, provider: chosen.provider, model: chosen.model })
+        setModelLabel(chosen.label)
+        setSuggestionKeyword(theme)
+        setSuggestions(result.topics ?? [])
+        setSelectedSuggestions([])
+      } catch (error) {
+        setSuggestError(String(error?.message ?? error))
+      } finally {
+        setSuggesting(false)
+      }
+    }
+    const addSuggestions = () => {
+      const theme = suggestionKeyword
+      const chosen = suggestions.filter((_, index) => selectedSuggestions.includes(index))
+      if (!chosen.length) return setSuggestError('请先勾选要加入的话题')
+      setTopics((current) => {
+        const existing = new Set(current.map((topic) => topic.text.trim()))
+        const next = [...current]
+        for (const text of chosen) {
+          if (next.length >= MAX_TOPICS || !text.trim() || existing.has(text.trim())) continue
+          next.push({ id: `topic-${Date.now()}-${Math.random().toString(36).slice(2)}`, text: text.trim(), tags: theme.length <= 30 ? [theme] : [], sourceKeyword: theme, enabled: true })
+          existing.add(text.trim())
+        }
+        return next
+      })
+      setSuggestions([])
+      setSelectedSuggestions([])
+      setSuggestError('')
+    }
+    const allTags = [...new Set(topics.flatMap((topic) => topic.tags.length ? topic.tags : ['未分类']))]
+    const visibleTopics = tagFilter ? topics.filter((topic) => (topic.tags.length ? topic.tags : ['未分类']).includes(tagFilter)) : topics
 
     return h('div', { style: enabled ? { ...styles.card, ...styles.cardOn } : styles.card },
       h('div', {
@@ -110,7 +164,36 @@ export function createChatCard({ React, h, C, styles, formatRelative, postJson, 
           field('发送冷却（小时）', numberInput(cooldownHours, setCooldownHours, 1, 720)),
           field('安静时段开始（小时）', numberInput(quietStart, setQuietStart, 0, 23)),
           field('安静时段结束（小时）', numberInput(quietEnd, setQuietEnd, 0, 23)),
-          field('话题提示（多个话题用 | 分隔）', h('input', { style: styles.input, value: topics, maxLength: 120, placeholder: '留空使用内置话题', onChange: (event) => setTopics(event.target.value) })),
+        ),
+        h('section', { style: { marginTop: 18, borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 16 } },
+          h('h3', { style: { margin: '0 0 6px', fontSize: 14 } }, '话题池'),
+          h('p', { style: styles.desc }, '话题提示按标签先随机、再选话题；直接发送 Markdown 时会原文发送。修改后请保存。'),
+          h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', margin: '12px 0' } },
+            field('按主题词 AI 推荐', h('input', { style: styles.input, value: keyword, maxLength: 80, placeholder: '例如：CS2 赛事', onChange: (event) => setKeyword(event.target.value) }), { flex: '1 1 220px' }),
+            h('button', { type: 'button', style: styles.ghostButton, disabled: suggesting, onClick: () => { void recommend() } }, suggesting ? '生成中…' : 'AI 推荐')),
+          modelLabel ? h('p', { style: styles.desc }, `推荐模型：${modelLabel}`) : null,
+          suggestError ? h('p', { role: 'alert', style: styles.warnText }, suggestError) : null,
+          suggestions.length ? h('div', { style: { border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8, padding: 12, marginBottom: 12 } },
+            h('p', { style: styles.desc }, '勾选并可编辑候选；加入话题池后仍需点击保存。'),
+            ...suggestions.map((text, index) => h('div', { key: index, style: { display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0' } },
+              h('input', { type: 'checkbox', 'aria-label': `选择候选话题 ${index + 1}`, checked: selectedSuggestions.includes(index), onChange: (event) => setSelectedSuggestions((current) => event.target.checked ? [...current, index] : current.filter((value) => value !== index)) }),
+              h('input', { style: { ...styles.input, flex: 1 }, 'aria-label': `候选话题 ${index + 1}`, value: text, maxLength: 120, onChange: (event) => setSuggestions((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item)) }))),
+            h('button', { type: 'button', style: styles.primaryButton, onClick: addSuggestions }, '加入话题池')) : null,
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '12px 0' } },
+            h('strong', { style: { fontSize: 13 } }, `已添加 ${topics.length}/${MAX_TOPICS} 条`),
+            h('select', { style: { ...styles.select, width: 'auto', maxWidth: '100%' }, 'aria-label': '按标签筛选话题', value: tagFilter, onChange: (event) => setTagFilter(event.target.value) },
+              h('option', { value: '' }, '全部标签'),
+              ...allTags.map((tag) => h('option', { key: tag, value: tag }, tag))),
+            h('button', { type: 'button', style: styles.ghostButton, disabled: topics.length >= MAX_TOPICS, onClick: addTopic }, '手动添加')),
+          topics.length === 0 ? h('p', { style: styles.desc }, `话题池为空时使用内置话题：${DEFAULT_TOPICS.join('、')}`) : null,
+          ...visibleTopics.map((topic) => h('div', { key: topic.id, style: { border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8, padding: 10, marginBottom: 8 } },
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              h('input', { style: { ...styles.input, flex: '1 1 240px' }, 'aria-label': '话题内容', value: topic.text, maxLength: 120, placeholder: '输入可直接发送的开场白', onChange: (event) => updateTopic(topic.id, { text: event.target.value }) }),
+              h('label', null, h('input', { type: 'checkbox', checked: topic.enabled, onChange: (event) => updateTopic(topic.id, { enabled: event.target.checked }) }), '启用'),
+              h('button', { type: 'button', style: styles.ghostButton, onClick: () => setTopics((current) => current.filter((item) => item.id !== topic.id)) }, '删除')),
+            h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 } },
+              field('标签（逗号分隔，最多 5 个）', h('input', { style: styles.input, value: topic.tags.join('，'), placeholder: '例如：CS2，赛事', onChange: (event) => updateTopic(topic.id, { tags: [...new Set(event.target.value.split(/[,，;；]+/).map((tag) => tag.trim()).filter(Boolean))].slice(0, 5) }) }), { flex: '1 1 220px' }),
+              topic.sourceKeyword ? h('span', { style: styles.desc }, `来源主题词：${topic.sourceKeyword}`) : null))),
         ),
         targetOptions.invalidSelected ? h('p', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
         h('p', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),

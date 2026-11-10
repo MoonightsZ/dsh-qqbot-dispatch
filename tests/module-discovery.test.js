@@ -6,6 +6,13 @@ import { join } from 'node:path'
 import { createLazyProvider, discoverModules } from '../module-discovery.js'
 import { createFeatureRuntime } from '../features.js'
 
+test('内置闲聊模组以话题列表字段正常发现', async () => {
+  const modules = await discoverModules()
+  const chat = modules.find((item) => item.definition.id === 'casual-chat')
+  assert.ok(chat)
+  assert.equal(chat.definition.fields.find((field) => field.key === 'topics').kind, 'topics')
+})
+
 test('扫描新模组并默认关闭，用户开启后才参与自动运行', async () => {
   const root = mkdtempSync(join(tmpdir(), 'qqbot-modules-'))
   const directory = join(root, 'sample-alert')

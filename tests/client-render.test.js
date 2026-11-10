@@ -83,8 +83,75 @@ test('偶尔闲聊使用独立设置卡片', () => {
   assert.match(JSON.stringify(view), /每日检查时间/)
   assert.match(JSON.stringify(view), /发送冷却（小时）/)
   assert.match(JSON.stringify(view), /话题提示/)
+  assert.match(JSON.stringify(view), /话题池/)
+  assert.match(JSON.stringify(view), /AI 推荐/)
   assert.match(JSON.stringify(view), /下次计划执行/)
   assert.match(JSON.stringify(view), /刷新选项/)
+})
+
+test('AI 候选须手选加入话题池，保存后才进入配置', async () => {
+  const state = []
+  let cursor = 0
+  const StatefulReact = { useState: (initial) => {
+    const index = cursor++
+    if (!(index in state)) state[index] = initial
+    return [state[index], (next) => { state[index] = typeof next === 'function' ? next(state[index]) : next }]
+  } }
+  let saved
+  const done = new Promise((resolve) => { saved = resolve })
+  let payload
+  const ChatCard = createChatCard({ React: StatefulReact, h, C, styles, ...common,
+    FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run', TOPIC_MODELS_PATH: '/chat/models', TOPIC_RECOMMEND_PATH: '/chat/recommend',
+    readJson: async () => ({ models: [{ provider: 'one', model: 'a', label: '模型 A' }] }),
+    postJson: async (path, body) => path === '/chat/recommend' ? { topics: ['来聊 CS2 吗？'] } : (payload = body, { features: [{ id: body.id, enabled: body.enabled }] }),
+  })
+  const props = { feature: { id: 'casual-chat', label: '偶尔闲聊', target: { sessionId: 'session-1' }, values: { topics: [] }, cron: ['0 19 * * *'] },
+    sessions: [{ sessionId: 'session-1', title: '群', scope: 'group' }], open: true, onSaved: saved, onRun: () => {}, onNotice: () => {} }
+  const render = () => { cursor = 0; return ChatCard(props) }
+  const find = (view, predicate) => {
+    const visit = (node) => {
+      if (Array.isArray(node)) { for (const child of node) { const found = visit(child); if (found) return found } }
+      if (!node || typeof node !== 'object') return null
+      if (predicate(node)) return node
+      return visit(node.children)
+    }
+    return visit(view)
+  }
+  find(render(), (node) => node.type === 'input' && node.props.placeholder === '例如：CS2 赛事').props.onChange({ target: { value: 'CS2' } })
+  find(render(), (node) => node.type === 'button' && node.children.includes('AI 推荐')).props.onClick()
+  await new Promise(setImmediate)
+  assert.equal(state[7].length, 0)
+  let view = render()
+  find(view, (node) => node.type === 'input' && node.props.placeholder === '例如：CS2 赛事').props.onChange({ target: { value: '别的话题' } })
+  view = render()
+  find(view, (node) => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === false).props.onChange({ target: { checked: true } })
+  view = render()
+  find(view, (node) => node.type === 'button' && node.children.includes('加入话题池')).props.onClick()
+  view = render()
+  assert.match(JSON.stringify(view), /来聊 CS2 吗？/)
+  find(view, (node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
+  await done
+  assert.equal(payload.values.topics[0].text, '来聊 CS2 吗？')
+  assert.deepEqual(payload.values.topics[0].tags, ['CS2'])
+})
+
+test('话题全部禁用时立即发起提示跳过', async () => {
+  const notices = []
+  let finished
+  const done = new Promise((resolve) => { finished = resolve })
+  const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (path, body) => path === '/features' ? { features: [{ id: body.id, enabled: false }] } : { result: { sent: 0, warning: '话题池没有启用的话题，已跳过闲聊' } } })
+  const view = ChatCard({ feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: 'session-1' }, values: { topics: [{ id: 'a', text: '话题', tags: [], enabled: false }] } },
+    sessions: [{ sessionId: 'session-1', scope: 'group' }], open: true, onSaved: () => {}, onRun: finished, onNotice: (notice) => notices.push(notice) })
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.map(visit).find(Boolean)
+    if (!node || typeof node !== 'object') return null
+    if (node.type === 'button' && node.children.includes('立即发起')) return node
+    return visit(node.children)
+  }
+  visit(view).props.onClick()
+  await done
+  assert.match(notices.at(-1).text, /已跳过闲聊/)
 })
 
 test('有功能資料時可繪製設定卡片', () => {

@@ -16,11 +16,13 @@ const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
 const FEATURES_PATH = '/qqbot-tool-dispatch/features'
 const SETTINGS_PATH = '/qqbot-tool-dispatch/settings'
 const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
+const TOPIC_MODELS_PATH = '/qqbot-tool-dispatch/chat/models'
+const TOPIC_RECOMMEND_PATH = '/qqbot-tool-dispatch/chat/recommend'
 const { readJson, postJson, formatRelative, formatAbsolute, PanelIcon, Switch, StatusPill, Section } = createCommon({ h, C, styles })
 const { SessionTable } = createSessionTables({ h, C, styles, formatRelative, formatAbsolute, StatusPill })
 const FeatureNavigation = createFeatureNavigation({ h, styles })
 const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
-const ChatCard = createChatCard({ React, h, C, styles, formatRelative, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
+const ChatCard = createChatCard({ React, h, C, styles, formatRelative, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, TOPIC_MODELS_PATH, TOPIC_RECOMMEND_PATH, Switch })
 const ExtensionCard = createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
 const GlobalTargetSettings = createGlobalTargetSettings({ React, h, styles, postJson, SETTINGS_PATH })
 
