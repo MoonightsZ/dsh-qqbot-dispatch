@@ -103,6 +103,25 @@ test('立即发送请求显式传递重发选项', async () => {
   assert.deepEqual(calls, [{ id: 'cs2-matches', options: { manual: true, forceResend: true } }])
 })
 
+test('CS2 立即发送请求可指定每日汇总或赛前提醒', async () => {
+  const handlers = new Map()
+  const calls = []
+  registerDispatchRoutes({
+    inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
+    get: () => undefined,
+  }, {
+    resolver: createSessionResolver({ appId: 'app' }),
+    groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} },
+    features: { run: async (id, options) => { calls.push({ id, options }); return { sent: 1 } } },
+    defaultMode: 'queue', qqbotApi: {}, loadOptionalPatches: () => [],
+  })
+  const req = Readable.from([Buffer.from(JSON.stringify({ id: 'cs2-matches', noticeMode: 'pre-match', forceResend: true }))])
+  req.method = 'POST'
+  req.headers = { host: 'localhost:3000' }
+  await handlers.get('/qqbot-tool-dispatch/features/run')(req, { writeHead: () => {}, end: () => {} })
+  assert.deepEqual(calls, [{ id: 'cs2-matches', options: { manual: true, forceResend: true, noticeMode: 'pre-match' } }])
+})
+
 test('側欄只列出上游已映射的 QQ 會話，即使工作目錄不同', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qqbot-dispatch-routes-'))
   const prefsPath = join(dir, 'model-prefs.json')

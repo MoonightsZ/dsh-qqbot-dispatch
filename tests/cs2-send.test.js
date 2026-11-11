@@ -81,6 +81,22 @@ test('赛前提醒只发送首次进入提前量窗口的赛事', async () => {
   assert.equal(sent.length, 2)
 })
 
+test('同一场赛事已进每日汇总后仍可在赛前提醒', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const match = { id: 'overlap-one', timestamp: Math.floor((now + 30 * 60_000) / 1000),
+    teamA: 'Team A', teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament: 'Test Cup', tournamentPage: '', logoA: null, logoB: null, bestOf: 3 }
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [match], upstreamSender: { send: async (item) => sent.push(item) } })
+  const feature = { source: { id: 'liquipedia' }, noticeMode: 'daily-digest', digestDay: 'today', leadMinutes: 60,
+    timeZone: 'Asia/Shanghai', values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'session-1' }, now: () => now }
+  assert.equal((await provider({ ...input, noticeMode: 'daily-digest' })).sent, 1)
+  assert.equal((await provider({ ...input, noticeMode: 'pre-match' })).sent, 1)
+  assert.equal(sent.length, 2)
+  assert.ok(feature.seen['pre:overlap-one'])
+})
+
 test('较长的每日汇总分段发送，部分失败后只补发未成功的赛事', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const matches = Array.from({ length: 25 }, (_, index) => ({

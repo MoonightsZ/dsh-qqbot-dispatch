@@ -177,16 +177,16 @@ test('有功能資料時可繪製設定卡片', () => {
     node.children?.forEach(visit)
   }
   visit(view)
-  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知方式', '检查计划', '通知内容'])
+  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知规则', '模板选择', '通知内容'])
   assert.match(JSON.stringify(view), /每日汇总/)
   assert.match(JSON.stringify(view), /赛前提醒/)
   assert.match(JSON.stringify(view), /添加规则/)
   assert.match(JSON.stringify(view), /执行时间/)
-  assert.match(JSON.stringify(view), /下次计划执行/)
+  assert.match(JSON.stringify(view), /保存后更新下次执行时间/)
   assert.match(JSON.stringify(view), /刷新选项/)
 })
 
-test('切换 CS2 通知方式会填入对应检查计划并保存', async () => {
+test('启用赛前提醒不会关闭每日汇总，并保存各自检查计划', async () => {
   const state = []
   let cursor = 0
   const StatefulReact = { useState: (initial) => {
@@ -221,15 +221,25 @@ test('切换 CS2 通知方式会填入对应检查计划并保存', async () => 
     visit(view)
     return found
   }
-  buttons(render()).find((item) => item.children.includes('赛前提醒')).props.onClick()
+  const switches = []
+  const collect = (node) => {
+    if (Array.isArray(node)) { node.forEach(collect); return }
+    if (!node || typeof node !== 'object') return
+    if (node.type === common.Switch && node.props.label === '赛前提醒开关') switches.push(node)
+    node.children?.forEach(collect)
+  }
+  collect(render())
+  switches[0].props.onChange(true)
   const view = render()
   assert.match(JSON.stringify(view), /最多提前提醒/)
   assert.match(JSON.stringify(view), /保存后更新下次执行时间/)
   buttons(view).find((item) => item.children.includes('保存')).props.onClick()
   await done
-  assert.equal(payload.noticeMode, 'pre-match')
-  assert.equal(payload.scheduleMode, 'interval')
-  assert.equal(payload.intervalMinutes, 15)
+  assert.equal(payload.noticeRules['daily-digest'].enabled, true)
+  assert.equal(payload.noticeRules['pre-match'].enabled, true)
+  assert.equal(payload.noticeRules['daily-digest'].scheduleMode, 'cron')
+  assert.equal(payload.noticeRules['pre-match'].scheduleMode, 'interval')
+  assert.equal(payload.noticeRules['pre-match'].intervalMinutes, 15)
 })
 
 test('CS2 立即发送先保存当前配置再请求重发', async () => {
@@ -269,7 +279,7 @@ test('CS2 立即发送先保存当前配置再请求重发', async () => {
   send.props.onClick()
   await done
   assert.deepEqual(calls.map((call) => call.path), ['/features', '/features/run'])
-  assert.deepEqual(calls[1].body, { id: 'cs2-matches', forceResend: true })
+  assert.deepEqual(calls[1].body, { id: 'cs2-matches', noticeMode: 'daily-digest', forceResend: true })
 })
 
 test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', async () => {
@@ -345,7 +355,7 @@ test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', asyn
     return visit(view)
   }
   assert.equal(find(render(), (node) => node.type === 'textarea')?.props.value, digestTemplate)
-  find(render(), (node) => node.type === 'button' && node.children.includes('赛前提醒')).props.onClick()
+  find(render(), (node) => node.type === 'button' && node.children.includes('赛前提醒模板')).props.onClick()
   assert.equal(find(render(), (node) => node.type === 'textarea')?.props.value, preMatchTemplate)
   find(render(), (node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
@@ -353,7 +363,7 @@ test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', asyn
   assert.equal(payload.preMatchTemplate, preMatchTemplate)
 })
 
-test('CS2 直接发送模式显示全局配置提示，模板暂不可编辑', async () => {
+test('CS2 直接发送模式隐藏内容设置，显示实际排版预览和红字原因', async () => {
   let submitted
   let finished
   const done = new Promise((resolve) => { finished = resolve })
@@ -385,11 +395,15 @@ test('CS2 直接发送模式显示全局配置提示，模板暂不可编辑', a
     node.children?.forEach(visit)
   }
   visit(view)
-  assert.match(JSON.stringify(view), /全局当前为直接发送模式/)
-  assert.ok(nodes.some((node) => node.type === 'textarea' && node.props.disabled === true))
-  for (const label of ['固定赛事内容', 'AI 焦点分析', '恢复默认模板']) {
-    assert.equal(nodes.find((node) => node.type === 'button' && node.children.includes(label))?.props.disabled, true)
-  }
+  const rendered = JSON.stringify(view)
+  assert.match(rendered, /全局已选择“直接发送 Markdown”/)
+  assert.match(rendered, /每日汇总 · 发送内容示例/)
+  assert.match(rendered, /赛前提醒 · 发送内容示例/)
+  assert.match(rendered, /队伍 A/)
+  assert.match(rendered, /Liquipedia/)
+  assert.ok(nodes.some((node) => node.type === 'p' && node.props.style?.color === C.error && node.children[0].includes('无法设置')))
+  assert.equal(nodes.some((node) => node.type === 'textarea'), false)
+  assert.equal(nodes.some((node) => node.type === 'button' && ['固定赛事内容', 'AI 焦点分析', '恢复默认模板', '每日汇总模板'].includes(node.children[0])), false)
   nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
   assert.equal(submitted.deliveryMode, 'service-turn')

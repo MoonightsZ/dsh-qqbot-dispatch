@@ -461,6 +461,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
             const result = await Promise.resolve(features.run(String(body?.id ?? ''), {
               manual: true,
               ...(body?.id === 'cs2-matches' && body?.forceResend === true ? { forceResend: true } : {}),
+              ...(body?.id === 'cs2-matches' && typeof body?.noticeMode === 'string' ? { noticeMode: body.noticeMode } : {}),
             }))
             sendJson(res, 200, { result })
           } catch (error) {

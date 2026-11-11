@@ -27,6 +27,7 @@ import {
   migrateCs2ModeTemplates,
 } from './modules/cs2-matches/template.js'
 import { normalizeTopics } from './modules/casual-chat/topics.js'
+import { CS2_RULE_IDS, defaultCs2NoticeRules, migrateCs2NoticeRules } from './modules/cs2-matches/rules.js'
 export { cronMatches, parseCronList } from './cron.js'
 
 /** State document shared by every feature toggle. */
@@ -81,6 +82,7 @@ function defaultFeature(entry) {
       deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE,
       digestTemplate: DEFAULT_CS2_DIGEST_TEMPLATE, preMatchTemplate: DEFAULT_CS2_PRE_MATCH_TEMPLATE,
       noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
+      noticeRules: defaultCs2NoticeRules(),
     } : {}),
     values: defaultValues(entry),
     lastRunAt: 0,
@@ -112,6 +114,7 @@ function readStateFile(entries, statePath) {
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
       if (id === 'cs2-matches') {
         if (feature.noticeMode === undefined) base.features[id].noticeMode = 'legacy'
+        base.features[id].noticeRules = migrateCs2NoticeRules(feature)
         const migrated = migrateCs2ModeTemplates(feature.serviceTemplate)
         try {
           base.features[id].serviceTemplate = validateCs2ServiceTemplate(feature.serviceTemplate)
@@ -200,6 +203,7 @@ export function configFromInput(entry, input) {
       noticeMode: ['daily-digest', 'pre-match', 'legacy'].includes(source.noticeMode) ? source.noticeMode : 'daily-digest',
       digestDay: source.digestDay === 'today' ? 'today' : 'tomorrow',
       leadMinutes: clamp(Number(source.leadMinutes) || 60, 15, 360),
+      noticeRules: migrateCs2NoticeRules(source, 'daily-digest'),
     } : {}),
   }
 }
@@ -237,6 +241,12 @@ function publicFeature(entry, feature, statePath, credential) {
       noticeMode: feature.noticeMode ?? 'daily-digest',
       digestDay: feature.digestDay === 'today' ? 'today' : 'tomorrow',
       leadMinutes: feature.leadMinutes ?? 60,
+      noticeRules: Object.fromEntries(Object.entries(migrateCs2NoticeRules(feature)).map(([id, rule]) => [id, {
+        ...rule,
+        cronValid: rule.scheduleMode !== 'cron' || parseCronList(rule.cron) !== undefined,
+        cronDescription: rule.scheduleMode === 'cron' ? describeCron(rule.cron) : null,
+        nextRunAt: nextRunAt({ ...rule, timeZone: feature.timeZone }),
+      }])),
     } : {}),
     values: feature.values ?? {},
     lastRunAt: feature.lastRunAt ?? 0,
@@ -317,6 +327,13 @@ export function createFeatureRuntime(options) {
   async function save(id, input) {
     const entry = descriptor(id, entries)
     const submitted = configFromInput(entry, input)
+    if (id === 'cs2-matches') {
+      for (const [mode, rule] of Object.entries(submitted.noticeRules)) {
+        if (rule.enabled && rule.scheduleMode === 'cron' && parseCronList(rule.cron) === undefined) {
+          throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'}的 Cron 规则无效`)
+        }
+      }
+    }
     const state = read()
     if (submitted.enabled && !submitted.target.sessionId && !state.settings.defaultTargetSessionId) throw new Error('请先设置全局默认目标或选择模组目标会话')
 
@@ -329,6 +346,13 @@ export function createFeatureRuntime(options) {
     }
 
     const feature = state.features[id] ?? defaultFeature(entry)
+    if (id === 'cs2-matches') {
+      const previous = migrateCs2NoticeRules(feature)
+      for (const [mode, rule] of Object.entries(submitted.noticeRules)) {
+        rule.lastRunAt = previous[mode]?.lastRunAt ?? 0
+        rule.lastResult = previous[mode]?.lastResult ?? null
+      }
+    }
     Object.assign(feature, submitted)
     state.features[id] = feature
     writeStateFile(statePath, state)
@@ -336,13 +360,17 @@ export function createFeatureRuntime(options) {
   }
 
   /** A provider may later fill this in; until then a run only records the gap. */
-  function run(id, { manual = false, forceResend = false } = {}) {
+  function run(id, { manual = false, forceResend = false, noticeMode } = {}) {
     const entry = descriptor(id, entries)
     const state = read()
     const feature = state.features[id] ?? defaultFeature(entry)
+    const rules = id === 'cs2-matches' ? migrateCs2NoticeRules(feature) : null
+    const mode = id === 'cs2-matches' ? (noticeMode ?? feature.noticeMode ?? 'daily-digest') : undefined
+    if (rules !== null && !Object.hasOwn(rules, mode)) throw new Error('通知规则无效')
+    const rule = rules?.[mode]
     const checkedAt = now()
-    const result = { checkedAt, matched: 0, sent: 0, error: '' }
-    if (!feature.enabled && (!manual || entry.extension === true)) {
+    const result = { checkedAt, matched: 0, sent: 0, error: '', ...(mode === undefined ? {} : { noticeMode: mode }) }
+    if ((!feature.enabled || (rule !== undefined && !rule.enabled)) && (!manual || entry.extension === true)) {
       return { skipped: true, reason: 'disabled' }
     }
     if (running.has(id)) return { skipped: true, reason: 'running' }
@@ -352,6 +380,11 @@ export function createFeatureRuntime(options) {
       result.error = sourceId === 'none' ? '数据源尚未接入' : `数据源 ${sourceId} 尚未接入`
       feature.lastRunAt = checkedAt
       feature.lastResult = result
+      if (rule !== undefined) {
+        rule.lastRunAt = checkedAt
+        rule.lastResult = result
+        feature.noticeRules = rules
+      }
       state.features[id] = feature
       writeStateFile(statePath, state)
       return result
@@ -361,7 +394,7 @@ export function createFeatureRuntime(options) {
       .then(async () => {
         const sessionId = String(feature.target?.sessionId ?? '').trim() || state.settings.defaultTargetSessionId
         if (sessionId === '') throw new Error('未选择目标会话')
-        const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend })
+        const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend, ...(mode === undefined ? {} : { noticeMode: mode }) })
         result.matched = Number(outcome?.matched ?? 0)
         result.sent = Number(outcome?.sent ?? 0)
         if (typeof outcome?.error === 'string') result.error = outcome.error
@@ -378,6 +411,10 @@ export function createFeatureRuntime(options) {
         feature.lastRunAt = checkedAt
         feature.lastResult = result
         const latest = read()
+        const latestRules = id === 'cs2-matches' ? migrateCs2NoticeRules(latest.features[id] ?? feature) : null
+        if (latestRules !== null) {
+          latestRules[mode] = { ...latestRules[mode], lastRunAt: checkedAt, lastResult: result }
+        }
         latest.features[id] = {
           ...(latest.features[id] ?? feature),
           lastRunAt: checkedAt,
@@ -386,6 +423,7 @@ export function createFeatureRuntime(options) {
           tierCache: feature.tierCache,
           lastSentAt: feature.lastSentAt,
           ...(id === 'casual-chat' ? { lastTopicId: feature.lastTopicId } : {}),
+          ...(latestRules === null ? {} : { noticeRules: latestRules }),
         }
         writeStateFile(statePath, latest)
       })
@@ -404,6 +442,19 @@ export function createFeatureRuntime(options) {
       const feature = state.features[entry.id]
       if (feature === undefined || feature.enabled !== true) continue
       if (!providers.has(entry.id)) continue
+      if (entry.id === 'cs2-matches') {
+        const at = now()
+        for (const [mode, rule] of Object.entries(migrateCs2NoticeRules(feature))) {
+          if (!rule.enabled) continue
+          if (rule.scheduleMode === 'cron') {
+            const list = parseCronList(rule.cron)
+            if (list === undefined || !list.some((sets) => cronMatches(sets, new Date(at), feature.timeZone ?? 'Asia/Shanghai'))) continue
+            if (rule.lastRunAt !== 0 && Math.floor(rule.lastRunAt / 60_000) === Math.floor(at / 60_000)) continue
+          } else if (at - rule.lastRunAt < rule.intervalMinutes * 60_000) continue
+          await Promise.resolve(run(entry.id, { noticeMode: mode })).catch(() => {})
+        }
+        continue
+      }
       if (feature.scheduleMode === 'cron') {
         const list = parseCronList(feature.cron ?? '')
         if (list === undefined) continue
@@ -433,5 +484,5 @@ export function createFeatureRuntime(options) {
     startup = null
   }
 
-  return { snapshot, save, saveSettings, run, registerProvider, start, stop, providers }
+  return { snapshot, save, saveSettings, run, tick, registerProvider, start, stop, providers }
 }

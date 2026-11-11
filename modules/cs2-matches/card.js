@@ -1,6 +1,8 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
 import { featureTargetOptions } from '../../client/session-options.js'
 import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE } from './template.js'
+import { migrateCs2NoticeRules } from './rules.js'
+import { previewCs2FixedNotice } from './provider.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
   const { useState } = React
@@ -141,7 +143,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [baseUrl, setBaseUrl] = useState(feature.source?.baseUrl ?? '')
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
-  const [intervalText, setIntervalText] = useState(String(feature.intervalMinutes ?? 60))
+  const [noticeRules, setNoticeRules] = useState(migrateCs2NoticeRules(feature, 'daily-digest'))
   const [noticeMode, setNoticeMode] = useState(feature.noticeMode ?? 'legacy')
   const [digestDay, setDigestDay] = useState(feature.digestDay === 'today' ? 'today' : 'tomorrow')
   const [leadMinutesText, setLeadMinutesText] = useState(String(feature.leadMinutes ?? 60))
@@ -149,9 +151,9 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
   const [digestTemplate, setDigestTemplate] = useState(feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE)
   const [preMatchTemplate, setPreMatchTemplate] = useState(feature.preMatchTemplate ?? DEFAULT_CS2_PRE_MATCH_TEMPLATE)
-  const [scheduleMode, setScheduleMode] = useState(feature.scheduleMode === 'cron' ? 'cron' : 'interval')
-  const [cronEntries, setCronEntries] = useState(splitCronRules(feature.cron).length > 0 ? splitCronRules(feature.cron) : [''])
   const [busy, setBusy] = useState(false)
+
+  const updateRule = (mode, patch) => setNoticeRules((current) => ({ ...current, [mode]: { ...current[mode], ...patch } }))
 
   /** Fold whatever is still in the tag box into the saved list. */
   const commitTeams = () => {
@@ -174,15 +176,16 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     serviceTemplate,
     digestTemplate,
     preMatchTemplate,
-    noticeMode,
+    noticeMode: feature.noticeMode ?? 'daily-digest',
+    noticeRules,
     digestDay,
     leadMinutes: Number(leadMinutesText) || 60,
-    scheduleMode,
-    cron: cronEntries.map((entry) => entry.trim()).filter(Boolean),
+    scheduleMode: feature.scheduleMode,
+    cron: splitCronRules(feature.cron),
     source: { id: sourceId, baseUrl: baseUrl.trim() },
     ...(apiKey.trim() === '' ? {} : { credential: apiKey.trim() }),
     ...(clearKey ? { clearCredential: true } : {}),
-    intervalMinutes: Number(intervalText) || 60,
+    intervalMinutes: feature.intervalMinutes ?? 60,
     values: {
       teams: commitTeams(),
       tiers,
@@ -193,7 +196,9 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const persist = async (nextEnabled, overrides) => {
     if (nextEnabled !== false && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
     if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
-    if (scheduleMode === 'cron' && describeCron(cronEntries) === null) throw new Error('Cron 规则无效')
+    for (const [mode, rule] of Object.entries(noticeRules)) {
+      if (rule.enabled && rule.scheduleMode === 'cron' && describeCron(rule.cron) === null) throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'}的 Cron 规则无效`)
+    }
     const next = await postJson(FEATURES_PATH, payload(nextEnabled, overrides))
     setApiKey('')
     setClearKey(false)
@@ -216,7 +221,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     }
   }
 
-  const run = async (forceResend = false) => {
+  const run = async (mode, forceResend = false) => {
     setBusy(true)
     try {
       if (forceResend) await persist()
@@ -225,13 +230,14 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         if (savedTarget.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
         if (savedTarget.invalidSelected) throw new Error(savedTarget.unavailableSelected ? '已保存的目标群不可用，请先同步群名确认' : '已保存的目标会话已失效，请重新选择并保存')
       }
-      const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id, ...(forceResend ? { forceResend: true } : {}) })
+      const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id, noticeMode: mode, ...(forceResend ? { forceResend: true } : {}) })
       const action = forceResend ? '发送' : '检查'
-      if (result?.error) onNotice({ kind: 'error', text: `${feature.label} ${action}失败：${result.error}` })
-      else if (result?.skipped) onNotice({ kind: 'ok', text: `${feature.label} 正在运行，请稍后重试` })
-      else if (forceResend && result?.matched === 0) onNotice({ kind: 'ok', text: `${feature.label} 未找到匹配赛事` })
-      else if (result?.channel === 'service-turn') onNotice({ kind: 'ok', text: `${feature.label} 已提交 ${result?.sent ?? 0} 场赛事的服务回合，QQ 送达待确认` })
-      else onNotice({ kind: 'ok', text: `${feature.label} ${action}完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}` })
+      const name = mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'
+      if (result?.error) onNotice({ kind: 'error', text: `${name} ${action}失败：${result.error}` })
+      else if (result?.skipped) onNotice({ kind: 'ok', text: `${name} 正在运行，请稍后重试` })
+      else if (forceResend && result?.matched === 0) onNotice({ kind: 'ok', text: `${name} 未找到匹配赛事` })
+      else if (result?.channel === 'service-turn') onNotice({ kind: 'ok', text: `${name} 已提交 ${result?.sent ?? 0} 场赛事的服务回合，QQ 送达待确认` })
+      else onNotice({ kind: 'ok', text: `${name} ${action}完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}` })
       onRun()
     } catch (failure) {
       onNotice({ kind: 'error', text: `${feature.label} ${forceResend ? '发送' : '检查'}失败：${String(failure?.message ?? failure)}` })
@@ -241,23 +247,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   }
 
   const status = featureStatus(feature)
-  const cronDescription = describeCron(cronEntries)
-  const savedCron = JSON.stringify(splitCronRules(feature.cron)) === JSON.stringify(cronEntries.map((entry) => entry.trim()).filter(Boolean))
-  const scheduleChanged = scheduleMode !== feature.scheduleMode || (scheduleMode === 'cron'
-    ? !savedCron : Number(intervalText) !== (feature.intervalMinutes ?? 60))
   const tierOptions = feature.fields?.find((field) => field.kind === 'options')?.options ?? []
   const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
-
-  const selectNoticeMode = (mode) => {
-    setNoticeMode(mode)
-    if (mode === 'daily-digest') {
-      setScheduleMode('cron')
-      setCronEntries(['0 18 * * *'])
-    } else if (mode === 'pre-match') {
-      setScheduleMode('interval')
-      setIntervalText('15')
-    }
-  }
 
   const collapse = (event) => {
     event?.stopPropagation?.()
@@ -282,34 +273,118 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const templateHelp = noticeMode === 'daily-digest'
     ? '占位符：{{title}}、{{schedule}}、{{focusAnalysis}}、{{sourceUrl}}。保留按赛事分组的赛程、赛事看点与 Liquipedia 来源。'
     : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与 Liquipedia 来源。'
-  const contentSection = configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中按通知方式生成分析。',
+  const contentLocked = settings?.deliveryMethod === 'upstream-sdk'
+  const previewLine = (line, index) => {
+    const text = line.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    if (line === '---') return h('hr', { key: index, style: { border: 0, borderTop: `1px solid ${C.border}`, margin: '10px 0' } })
+    if (line === '') return h('div', { key: index, style: { height: 8 } })
+    if (line.startsWith('# ')) return h('strong', { key: index, style: { display: 'block', fontSize: 16 } }, text.slice(2))
+    if (line.startsWith('## ')) return h('strong', { key: index, style: { display: 'block', fontSize: 14 } }, text.slice(3))
+    return h('div', { key: index }, text)
+  }
+  const fixedPreview = (mode) => h('div', { key: mode, style: { ...styles.field, marginTop: 12 } },
+    h('span', { style: styles.label }, `${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'} · 发送内容示例`),
+    h('div', { style: { padding: 12, border: `1px solid ${C.border}`, borderRadius: 8,
+      background: C.layer2, color: C.primary, overflowWrap: 'anywhere', fontSize: 12, lineHeight: 1.6 } },
+    ...previewCs2FixedNotice(mode, feature.timeZone ?? 'Asia/Shanghai').split('\n').map(previewLine)),
+  )
+  const rulePanel = (mode, title, description) => {
+    const rule = noticeRules[mode]
+    if (!rule) return null
+    const entries = Array.isArray(rule.cron) && rule.cron.length > 0 ? rule.cron : ['']
+    const persistedRule = feature.noticeRules?.[mode]
+    const unchanged = persistedRule && rule.scheduleMode === persistedRule.scheduleMode &&
+      (rule.scheduleMode === 'cron'
+        ? JSON.stringify(splitCronRules(rule.cron)) === JSON.stringify(splitCronRules(persistedRule.cron))
+        : Number(rule.intervalMinutes) === Number(persistedRule.intervalMinutes))
+    const result = featureStatus(rule)
+    return h('div', { key: mode, style: { border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginTop: 14 } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+        h('strong', { style: { fontSize: 14 } }, title),
+        h('span', { style: { marginLeft: 'auto', fontSize: 12, color: C.secondary } }, rule.enabled ? '已启用' : '已停用'),
+        h(Switch, { checked: rule.enabled, disabled: busy, label: `${title}开关`, onChange: (checked) => updateRule(mode, { enabled: checked }) }),
+      ),
+      h('p', { style: styles.desc }, description),
+      mode === 'daily-digest' ? h('div', { style: styles.field },
+        h('span', { style: styles.label }, '汇总日期'),
+        h('select', { style: styles.select, value: digestDay, onChange: (event) => setDigestDay(event.target.value) },
+          h('option', { value: 'tomorrow' }, '明日赛程（推荐）'), h('option', { value: 'today' }, '今日赛程')),
+      ) : mode === 'pre-match' ? h('div', { style: styles.field },
+        h('span', { style: styles.label }, '最多提前提醒'),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('input', { style: { ...styles.input, flex: '0 1 110px' }, value: leadMinutesText,
+            type: 'number', min: 15, max: 360, onChange: (event) => setLeadMinutesText(event.target.value) }),
+          h('span', { style: styles.desc }, '分钟（15–360）')),
+      ) : h('p', { style: styles.warningCallout }, '旧版通知没有未来时间上限，建议改用每日汇总或赛前提醒。'),
+      h('div', { style: styles.field },
+        h('span', { style: styles.label }, '检查频率'),
+        h('div', { style: styles.segmented },
+          h('button', { type: 'button', style: rule.scheduleMode === 'interval' ? styles.segOn : styles.seg,
+            onClick: () => updateRule(mode, { scheduleMode: 'interval' }) }, '按间隔'),
+          h('button', { type: 'button', style: rule.scheduleMode === 'cron' ? styles.segOn : styles.seg,
+            onClick: () => updateRule(mode, { scheduleMode: 'cron' }) }, 'Cron')),
+        rule.scheduleMode === 'interval' ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('input', { style: { ...styles.input, flex: '0 1 110px' }, value: String(rule.intervalMinutes),
+            type: 'number', min: 15, max: 1440, onChange: (event) => updateRule(mode, { intervalMinutes: event.target.value }) }),
+          h('span', { style: styles.desc }, '分钟（15–1440）'))
+          : h('div', null,
+            ...entries.map((entry, index) => h('div', { key: index, style: { marginBottom: 8 } },
+              h('div', { style: { display: 'flex', gap: 8 } },
+                h('input', { style: { ...styles.input, flex: '1 1 0', minWidth: 0 }, value: entry, placeholder: '分 时 日 月 周，例如 0 19 * * 1-5',
+                  onChange: (event) => updateRule(mode, { cron: entries.map((item, position) => position === index ? event.target.value : item) }) }),
+                h('button', { type: 'button', style: styles.ghostButton, disabled: entries.length <= 1,
+                  onClick: () => updateRule(mode, { cron: entries.filter((_, position) => position !== index) }) }, '删除')),
+              h('span', { style: { color: describeCron(entry) === null ? C.error : C.secondary, fontSize: 11 } },
+                describeCron(entry) ?? '请输入有效的五段 Cron 规则'))),
+            h('button', { type: 'button', style: styles.ghostButton, disabled: entries.length >= 10,
+              onClick: () => updateRule(mode, { cron: [...entries, ''] }) }, '添加规则'),
+            h('span', { style: { color: C.secondary, fontSize: 11 } },
+              describeCron(entries) === null ? '规则无效' : `执行时间：${describeCron(entries)}`),
+            h('span', { style: styles.desc }, `时区：${feature.timeZone ?? 'Asia/Shanghai'}`)),
+        h('span', { style: styles.desc }, unchanged && persistedRule?.nextRunAt > 0
+          ? `下次计划执行：${rule.scheduleMode === 'cron' ? formatZonedTime(persistedRule.nextRunAt, feature.timeZone ?? 'Asia/Shanghai') : formatAbsolute(persistedRule.nextRunAt)}`
+          : '保存后更新下次执行时间'),
+        mode === 'daily-digest' && rule.scheduleMode === 'interval'
+          ? h('span', { style: styles.warnText }, '每日汇总每个日期最多发送一次，建议使用每天一次的 Cron。') : null,
+        mode === 'pre-match' && rule.scheduleMode === 'cron'
+          ? h('span', { style: styles.warnText }, '赛前提醒需要频繁检查，规则过少可能错过提醒窗口。') : null,
+      ),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 12 } },
+        h('button', { type: 'button', style: styles.ghostButton, disabled: busy, onClick: () => { void run(mode) } }, '立即检查'),
+        h('button', { type: 'button', style: styles.ghostButton, disabled: busy,
+          title: `保存当前配置并重发${title}匹配赛事`, onClick: () => { void run(mode, true) } }, '立即发送'),
+        h('span', { style: result.error ? styles.statusError : styles.statusLine }, result.text)),
+    )
+  }
+  const contentSection = contentLocked
+    ? configSection('05', '通知内容预览', '以下以示例赛事展示实际发送格式，比赛信息会在发送时替换。',
+      h('p', { style: { ...styles.warnText, color: C.error } }, '全局已选择“直接发送 Markdown”，此模式只发送固定赛事内容，无法设置 AI 焦点分析或编辑模板。请在“配置”页切换为服务回合投递后再设置。'),
+      fixedPreview('daily-digest'),
+      fixedPreview('pre-match'),
+      noticeRules.legacy ? fixedPreview('legacy') : null,
+    )
+    : configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中按通知方式生成分析。',
     h('div', { style: styles.field },
       h('span', { style: styles.label }, '内容生成方式'),
       h('div', { style: styles.segmented },
         h('button', { type: 'button', style: deliveryMode === 'direct' ? styles.segOn : styles.seg,
-          disabled: settings?.deliveryMethod === 'upstream-sdk',
           onClick: () => setDeliveryMode('direct') }, '固定赛事内容'),
         h('button', { type: 'button', style: deliveryMode === 'service-turn' ? styles.segOn : styles.seg,
-          disabled: settings?.deliveryMethod === 'upstream-sdk',
           onClick: () => setDeliveryMode('service-turn') }, 'AI 焦点分析'),
       ),
-      h('span', { style: styles.desc }, settings?.deliveryMethod === 'upstream-sdk'
-        ? '全局当前为直接发送模式：仅发送固定赛事内容；已保存的内容生成方式和模板会保留，切回服务回合投递后生效。'
-        : deliveryMode === 'service-turn'
+      h('span', { style: styles.desc }, deliveryMode === 'service-turn'
           ? `Agent 使用${templateName}模板生成赛程与分析；QQ 送达仍受平台限制。`
           : '已排版的赛事正文通过服务回合提交。'),
     ),
-    deliveryMode !== 'service-turn' ? null : h('div', { style: { ...styles.field, marginTop: 14 } },
+    deliveryMode !== 'service-turn' ? fixedPreview(noticeMode) : h('div', { style: { ...styles.field, marginTop: 14 } },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
         h('span', { style: styles.label }, `${templateName} Markdown 模板`),
         h('button', { type: 'button', style: { ...styles.ghostButton, marginLeft: 'auto', padding: '3px 9px' },
-          disabled: settings?.deliveryMethod === 'upstream-sdk',
           onClick: () => updateCurrentTemplate(defaultTemplate) }, '恢复默认模板'),
       ),
       h('textarea', {
         style: { ...styles.input, minHeight: 180, resize: 'vertical', fontFamily: 'ui-monospace, monospace', lineHeight: 1.5 },
         value: currentTemplate,
-        disabled: settings?.deliveryMethod === 'upstream-sdk',
         maxLength: 6000,
         'aria-label': `CS2 ${templateName} Markdown 模板`,
         onChange: (event) => updateCurrentTemplate(event.target.value),
@@ -334,7 +409,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         ? h('span', { style: styles.chipWarn }, feature.providerLabel)
         : h('span', { style: styles.chip }, feature.providerLabel),
       h('span', { style: styles.chip },
-        feature.scheduleMode === 'cron' ? `Cron · ${splitCronRules(feature.cron).length} 条` : `每 ${feature.intervalMinutes ?? 60} 分钟`),
+        `${Object.values(noticeRules).filter((rule) => rule.enabled).length} 条通知规则`),
       h('div', {
         style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 },
         onClick: (event) => event.stopPropagation(),
@@ -437,90 +512,19 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         h(TierRange, { options: tierOptions, tiers, onChange: setTiers }),
       ),
     )),
-    configSection('03', '通知方式', '先确定要通知哪一段赛程，再设置检查时间。',
+    configSection('03', '通知规则', '每日汇总与赛前提醒可同时启用；同一场比赛仍会在开赛前收到提醒。',
+      rulePanel('daily-digest', '每日赛程汇总', '按所选日期汇总赛程，每个日期最多自动发送一次。'),
+      rulePanel('pre-match', '赛前提醒', '赛事进入提醒窗口后首次检查发送一次；错过开赛不补发。'),
+      noticeRules.legacy ? rulePanel('legacy', '旧版通知', '保留升级前的通知规则，可关闭后迁移到新规则。') : null,
+    ),
+    contentLocked ? null : configSection('04', '模板选择', '仅选择下方要编辑的模板；不会切换或关闭通知规则。',
       h('div', { style: styles.segmented },
         h('button', { type: 'button', style: noticeMode === 'daily-digest' ? styles.segOn : styles.seg,
-          onClick: () => selectNoticeMode('daily-digest') }, '每日汇总'),
+          onClick: () => setNoticeMode('daily-digest') }, '每日汇总模板'),
         h('button', { type: 'button', style: noticeMode === 'pre-match' ? styles.segOn : styles.seg,
-          onClick: () => selectNoticeMode('pre-match') }, '赛前提醒'),
-        feature.noticeMode === 'legacy' || noticeMode === 'legacy'
-          ? h('button', { type: 'button', style: noticeMode === 'legacy' ? styles.segOn : styles.seg,
-            onClick: () => selectNoticeMode('legacy') }, '旧版通知') : null,
-      ),
-      noticeMode === 'daily-digest'
-        ? h('div', { style: { ...styles.field, marginTop: 12 } },
-          h('span', { style: styles.label }, '汇总日期'),
-          h('select', { style: styles.select, value: digestDay, onChange: (event) => setDigestDay(event.target.value) },
-            h('option', { value: 'tomorrow' }, '明日赛程（推荐）'),
-            h('option', { value: 'today' }, '今日赛程')),
-          h('span', { style: styles.desc }, '按设定时区汇总所选日期中数据源当前可见的赛事，每个日期最多自动发送一次。'),
-        )
-        : noticeMode === 'pre-match'
-          ? h('div', { style: { ...styles.field, marginTop: 12 } },
-            h('span', { style: styles.label }, '最多提前提醒'),
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-              h('input', { style: { ...styles.input, flex: '0 1 110px' }, value: leadMinutesText,
-                type: 'number', min: 15, max: 360, onChange: (event) => setLeadMinutesText(event.target.value) }),
-              h('span', { style: styles.desc }, '分钟（15–360）'),
-            ),
-            h('span', { style: styles.desc }, '赛事进入提前量窗口后的首次检查发送一次；错过开赛不补发。'),
-          )
-          : h('div', { style: styles.warningCallout }, '旧版通知会发送数据源中所有可见的未来赛事及最近 6 小时的赛事，没有未来时间上限。建议改用每日汇总或赛前提醒。'),
-      h('p', { style: styles.desc }, '切换通知方式会填入建议检查计划；保存前仍可调整。'),
-    ),
-    configSection('04', '检查计划', '设置自动检查赛事的时间；它不决定通知包含的赛事范围。',
-      h('div', { style: styles.field },
-        h('span', { style: styles.label }, '检查频率'),
-        h('div', { style: styles.segmented },
-          h('button', {
-            type: 'button',
-            style: scheduleMode === 'interval' ? styles.segOn : styles.seg,
-            onClick: () => setScheduleMode('interval'),
-          }, '按间隔'),
-          h('button', {
-            type: 'button',
-            style: scheduleMode === 'cron' ? styles.segOn : styles.seg,
-            onClick: () => setScheduleMode('cron'),
-          }, 'Cron'),
-        ),
-        scheduleMode === 'interval'
-          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            h('input', {
-              style: { ...styles.input, flex: '0 1 110px' },
-              value: intervalText,
-              inputMode: 'numeric',
-              onChange: (event) => setIntervalText(event.target.value),
-            }),
-            h('span', { style: { color: C.secondary, fontSize: 11 } }, '分钟（15–1440）'),
-          )
-          : h('div', null,
-            ...cronEntries.map((rule, index) => h('div', { key: index, style: { marginBottom: 8 } },
-              h('div', { style: { display: 'flex', gap: 8 } },
-                h('input', {
-                  style: styles.input, value: rule, placeholder: '分 时 日 月 周，例如 0 19 * * 1-5',
-                  onChange: (event) => setCronEntries((current) => current.map((item, position) => position === index ? event.target.value : item)),
-                }),
-                h('button', { type: 'button', style: styles.ghostButton, disabled: cronEntries.length <= 1,
-                  onClick: () => setCronEntries((current) => current.filter((_, position) => position !== index)) }, '删除'),
-              ),
-              h('span', { style: { color: describeCron(rule) === null ? C.error : C.secondary, fontSize: 11 } },
-                describeCron(rule) ?? '请输入有效的五段 Cron 规则'),
-            )),
-            h('button', { type: 'button', style: styles.ghostButton, disabled: cronEntries.length >= 10,
-              onClick: () => setCronEntries((current) => [...current, '']) }, '添加规则'),
-            h('div', { style: { color: cronDescription === null ? C.error : C.secondary, fontSize: 11, marginTop: 6 } },
-              cronDescription === null ? '规则无效；格式为「分 时 日 月 周」' : `执行时间：${cronDescription}`),
-            h('div', { style: { color: C.secondary, fontSize: 11 } }, `时区：${feature.timeZone ?? 'Asia/Shanghai'}；日期与星期条件需同时满足`),
-          ),
-        h('span', { style: { color: C.secondary, fontSize: 11 } },
-          scheduleChanged ? '保存后更新下次执行时间'
-            : feature.nextRunAt > 0
-              ? `${enabled ? '下次执行' : '启用后下次计划执行'}：${scheduleMode === 'cron' ? formatZonedTime(feature.nextRunAt, feature.timeZone ?? 'Asia/Shanghai') : formatAbsolute(feature.nextRunAt)}`
-              : '暂无下一次执行时间（请检查规则与时区）'),
-        noticeMode === 'daily-digest' && scheduleMode === 'interval'
-          ? h('span', { style: styles.warnText }, '每日汇总每个日期最多发送一次，建议改用每天一次的 Cron。') : null,
-        noticeMode === 'pre-match' && scheduleMode === 'cron'
-          ? h('span', { style: styles.warnText }, '赛前提醒需要频繁检查；Cron 检查过少可能错过提醒窗口。') : null,
+          onClick: () => setNoticeMode('pre-match') }, '赛前提醒模板'),
+        noticeRules.legacy ? h('button', { type: 'button', style: noticeMode === 'legacy' ? styles.segOn : styles.seg,
+          onClick: () => setNoticeMode('legacy') }, '旧版通知模板') : null,
       ),
     ),
     contentSection,
@@ -532,19 +536,6 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         disabled: busy,
         onClick: () => { void save() },
       }, busy ? '处理中…' : '保存'),
-      h('button', {
-        type: 'button',
-        style: { ...styles.ghostButton, ...(busy ? styles.disabledButton : {}) },
-        disabled: busy,
-        onClick: () => { void run() },
-      }, '立即检查'),
-      h('button', {
-        type: 'button',
-        style: { ...styles.ghostButton, ...(busy ? styles.disabledButton : {}) },
-        disabled: busy,
-        title: '保存当前配置并按通知方式重发匹配赛事，包括已通知过的赛事',
-        onClick: () => { void run(true) },
-      }, '立即发送'),
       h('span', { style: status.error ? styles.statusError : styles.statusLine }, status.text),
     ),
     ) : null,

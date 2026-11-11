@@ -246,6 +246,19 @@ function composeDailyDigestSections(matches, tiers, dayKey, timeZone) {
     batches.length > 1 ? `（${index + 1}/${batches.length}）` : ''))
 }
 
+/** Show the fixed Markdown layout with representative data, using the send renderer. */
+export function previewCs2FixedNotice(mode, timeZone = 'Asia/Shanghai') {
+  const timestamp = Math.floor((Date.now() + 24 * 60 * 60_000) / 1000)
+  const match = {
+    id: 'preview', timestamp, tournament: '示例赛事', tournamentPage: '',
+    teamA: '队伍 A', teamB: '队伍 B', bestOf: 3,
+  }
+  const tiers = new Map()
+  return mode === 'daily-digest'
+    ? composeDailyDigest([match], tiers, calendarDayKey(timestamp * 1000, timeZone), timeZone).markdown
+    : composeSections([match], tiers, timeZone)[0].markdown
+}
+
 /** The one match worth a picture card: the soonest followed team's match in the next day. */
 function pickFocus(matches, watched, nowMs) {
   const soon = matches.filter((match) => {
@@ -280,7 +293,7 @@ function pruneSeen(feature, checkedAt) {
 export function createLiquipediaProvider(options = {}) {
   const notificationDispatcher = options.notificationDispatcher ?? createNotificationDispatcher(options)
   const readMatches = options.loadMatches ?? loadMatches
-  return async ({ feature, settings, target, now, forceResend = false }) => {
+  return async ({ feature, settings, target, now, forceResend = false, noticeMode: requestedNoticeMode }) => {
     const sourceId = feature.source?.id ?? 'none'
     if (sourceId === 'none') return { matched: 0, sent: 0, error: '数据源尚未接入' }
     if (sourceId !== 'liquipedia') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现，请选择 Liquipedia` }
@@ -291,7 +304,7 @@ export function createLiquipediaProvider(options = {}) {
       : (await readMatches())
     if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
 
-    const noticeMode = feature.noticeMode ?? 'legacy'
+    const noticeMode = requestedNoticeMode ?? feature.noticeMode ?? 'legacy'
     const timeZone = feature.timeZone ?? 'Asia/Shanghai'
     const dayKey = noticeMode === 'daily-digest' ? digestDayKey(checkedAt, timeZone, feature.digestDay) : ''
     const leadMinutes = Math.min(360, Math.max(15, Number(feature.leadMinutes) || 60))
