@@ -315,6 +315,44 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
   assert.equal(submitted[0].serviceTemplate, template)
 })
 
+test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', async () => {
+  const state = []
+  let cursor = 0
+  const StatefulReact = { useState: (initial) => {
+    const index = cursor++
+    if (!(index in state)) state[index] = initial
+    return [state[index], (next) => { state[index] = typeof next === 'function' ? next(state[index]) : next }]
+  } }
+  let saved
+  const done = new Promise((resolve) => { saved = resolve })
+  let payload
+  const digestTemplate = '# 汇总 {{title}}\n{{schedule}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})'
+  const preMatchTemplate = '# 赛前 {{tournament}}\n{{matchups}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})'
+  const FeatureCard = createFeatureCard({ React: StatefulReact, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (_path, body) => { payload = body; return { features: [{ id: body.id, enabled: body.enabled }] } } })
+  const props = { feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, noticeMode: 'daily-digest', deliveryMode: 'service-turn',
+    digestTemplate, preMatchTemplate, source: { id: 'liquipedia' }, target: { sessionId: 'session-1' }, values: { teams: [], tiers: [] },
+    scheduleMode: 'cron', cron: ['0 18 * * *'], credential: {} },
+    sessions: [{ sessionId: 'session-1', scope: 'group' }], open: true, onSaved: saved, onRun: () => {}, onNotice: () => {} }
+  const render = () => { cursor = 0; return FeatureCard(props) }
+  const find = (view, predicate) => {
+    const visit = (node) => {
+      if (Array.isArray(node)) return node.map(visit).find(Boolean)
+      if (!node || typeof node !== 'object') return null
+      if (predicate(node)) return node
+      return visit(node.children)
+    }
+    return visit(view)
+  }
+  assert.equal(find(render(), (node) => node.type === 'textarea')?.props.value, digestTemplate)
+  find(render(), (node) => node.type === 'button' && node.children.includes('赛前提醒')).props.onClick()
+  assert.equal(find(render(), (node) => node.type === 'textarea')?.props.value, preMatchTemplate)
+  find(render(), (node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
+  await done
+  assert.equal(payload.digestTemplate, digestTemplate)
+  assert.equal(payload.preMatchTemplate, preMatchTemplate)
+})
+
 test('CS2 直接发送模式显示全局配置提示，模板暂不可编辑', async () => {
   let submitted
   let finished

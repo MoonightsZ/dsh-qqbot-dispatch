@@ -11,7 +11,7 @@
  *
  * @module dsh-qqbot-dispatch/liquipedia
  */
-import { composeCs2FixedNoticePrompt, composeCs2ServiceTurnPrompt } from './template.js'
+import { composeCs2FixedNoticePrompt, composeCs2ServiceTurnPrompt, migrateCs2ModeTemplates } from './template.js'
 import { createNotificationDispatcher } from '../../notification-dispatcher.js'
 
 const API = 'https://liquipedia.net/counterstrike/api.php'
@@ -212,9 +212,10 @@ function digestDayKey(checkedAt, timeZone, digestDay) {
 
 function composeDailyDigest(matches, tiers, dayKey, timeZone, part = '') {
   const sections = composeSections(matches, tiers, timeZone)
+  const scheduleMarkdown = sections.map((section) => section.markdown.split('\n\n---\n')[0].replace(/^# /, '## ')).join('\n')
   const markdown = [
     `# CS2 ${dayKey} 赛程${part}`, '', `共 ${matches.length} 场`, '',
-    ...sections.map((section) => section.markdown.split('\n\n---\n')[0].replace(/^# /, '## ')),
+    scheduleMarkdown,
     '', '---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0',
   ].join('\n')
   const text = [
@@ -224,7 +225,7 @@ function composeDailyDigest(matches, tiers, dayKey, timeZone, part = '') {
   ].join('\n')
   return {
     title: `CS2 ${dayKey} 赛程${part}`, markdown, text, matches,
-    matchupsMarkdown: sections.map((section) => section.matchupsMarkdown).join('\n'),
+    matchupsMarkdown: sections.map((section) => section.matchupsMarkdown).join('\n'), scheduleMarkdown,
     sourceUrl: 'https://liquipedia.net/counterstrike',
   }
 }
@@ -331,6 +332,10 @@ export function createLiquipediaProvider(options = {}) {
       }
       else for (const match of section.matches) feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : match.id] = checkedAt
     }
+    const modeTemplates = migrateCs2ModeTemplates(feature.serviceTemplate)
+    const serviceTemplate = noticeMode === 'daily-digest'
+      ? feature.digestTemplate ?? modeTemplates.digestTemplate
+      : noticeMode === 'pre-match' ? feature.preMatchTemplate ?? modeTemplates.preMatchTemplate : feature.serviceTemplate
     let channel = 'service-turn'
     for (const section of sections) {
       const outcome = await notificationDispatcher.dispatch({
@@ -338,7 +343,7 @@ export function createLiquipediaProvider(options = {}) {
         sessionId: target.sessionId,
         markdown: section.markdown,
         servicePrompt: () => feature.deliveryMode === 'service-turn'
-          ? composeCs2ServiceTurnPrompt(section, feature.serviceTemplate, pickFocus(section.matches, watched, now()) ?? section.matches[0])
+          ? composeCs2ServiceTurnPrompt(section, serviceTemplate, pickFocus(section.matches, watched, now()) ?? section.matches[0], noticeMode)
           : composeCs2FixedNoticePrompt(section.markdown),
       })
       channel = outcome.channel

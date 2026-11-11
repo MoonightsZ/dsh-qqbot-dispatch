@@ -21,7 +21,11 @@ import { dirname, resolve } from 'node:path'
 import { cronMatches, cronRules, describeCron, nextCronTime, parseCronList } from './cron.js'
 import { definition as cs2Matches } from './modules/cs2-matches/definition.js'
 import { definition as casualChat } from './modules/casual-chat/definition.js'
-import { DEFAULT_CS2_SERVICE_TEMPLATE, validateCs2ServiceTemplate } from './modules/cs2-matches/template.js'
+import {
+  DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE,
+  validateCs2ServiceTemplate, validateCs2DigestTemplate, validateCs2PreMatchTemplate,
+  migrateCs2ModeTemplates,
+} from './modules/cs2-matches/template.js'
 import { normalizeTopics } from './modules/casual-chat/topics.js'
 export { cronMatches, parseCronList } from './cron.js'
 
@@ -75,6 +79,7 @@ function defaultFeature(entry) {
     timeZone: 'Asia/Shanghai',
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE,
+      digestTemplate: DEFAULT_CS2_DIGEST_TEMPLATE, preMatchTemplate: DEFAULT_CS2_PRE_MATCH_TEMPLATE,
       noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
     } : {}),
     values: defaultValues(entry),
@@ -105,7 +110,17 @@ function readStateFile(entries, statePath) {
     for (const [id, feature] of Object.entries(parsed.features)) {
       if (feature === null || typeof feature !== 'object') continue
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
-      if (id === 'cs2-matches' && feature.noticeMode === undefined) base.features[id].noticeMode = 'legacy'
+      if (id === 'cs2-matches') {
+        if (feature.noticeMode === undefined) base.features[id].noticeMode = 'legacy'
+        const migrated = migrateCs2ModeTemplates(feature.serviceTemplate)
+        try {
+          base.features[id].serviceTemplate = validateCs2ServiceTemplate(feature.serviceTemplate)
+        } catch {
+          base.features[id].serviceTemplate = DEFAULT_CS2_SERVICE_TEMPLATE
+        }
+        base.features[id].digestTemplate = feature.digestTemplate ?? migrated.digestTemplate
+        base.features[id].preMatchTemplate = feature.preMatchTemplate ?? migrated.preMatchTemplate
+      }
       if (id === 'casual-chat') delete base.features[id].chatSentAt
       if (id === 'casual-chat' && feature.values !== null && typeof feature.values === 'object') {
         const values = { ...feature.values }
@@ -180,6 +195,8 @@ export function configFromInput(entry, input) {
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: source.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: validateCs2ServiceTemplate(source.serviceTemplate),
+      digestTemplate: validateCs2DigestTemplate(source.digestTemplate ?? migrateCs2ModeTemplates(source.serviceTemplate).digestTemplate),
+      preMatchTemplate: validateCs2PreMatchTemplate(source.preMatchTemplate ?? migrateCs2ModeTemplates(source.serviceTemplate).preMatchTemplate),
       noticeMode: ['daily-digest', 'pre-match', 'legacy'].includes(source.noticeMode) ? source.noticeMode : 'daily-digest',
       digestDay: source.digestDay === 'today' ? 'today' : 'tomorrow',
       leadMinutes: clamp(Number(source.leadMinutes) || 60, 15, 360),
@@ -215,6 +232,8 @@ function publicFeature(entry, feature, statePath, credential) {
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE,
+      digestTemplate: feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE,
+      preMatchTemplate: feature.preMatchTemplate ?? DEFAULT_CS2_PRE_MATCH_TEMPLATE,
       noticeMode: feature.noticeMode ?? 'daily-digest',
       digestDay: feature.digestDay === 'today' ? 'today' : 'tomorrow',
       leadMinutes: feature.leadMinutes ?? 60,

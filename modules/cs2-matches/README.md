@@ -31,21 +31,38 @@
 
 「固定赛事内容」（默认）提交已排版的赛事正文；「AI 焦点分析」让 Agent 根据赛事数据和已有会话上下文，在可编辑的 Markdown 模板中填写焦点分析。分析不自行联网，也不应编造战绩、阵容或胜率。
 
-默认模板：
+每日汇总和赛前提醒各有一套模板，切换通知方式即可编辑对应模板，修改一套不会覆盖另一套。旧版通知仍沿用原模板；已有自定义模板升级时会复制到赛前提醒，并将其中的赛事标题、对局占位符转换成每日汇总所需的日期标题、分组赛程占位符。
+
+每日汇总默认模板：
 
 ```md
-# {{tournament}}
+# {{title}}
 
-{{tier}}
+## 赛程总览
+{{schedule}}
 
-## 对局
-{{matchups}}
-
-## 焦点分析
+## 赛事看点
 {{focusAnalysis}}
 
 ---
 数据来源：[Liquipedia]({{sourceUrl}}) · CC BY-SA 3.0
 ```
 
-模板必须保留 `{{matchups}}`、`{{focusAnalysis}}`、`{{sourceUrl}}` 和 Liquipedia 来源标注。全局切换到直接发送 Markdown 时，内容生成方式和模板暂不可编辑，只发送固定赛事正文；已保存的选择会保留，切回服务回合投递后生效。投递方式见[根目录说明](../../README.md#全局投递配置)。
+赛前提醒默认模板：
+
+```md
+# {{tournament}}
+
+{{tier}}
+
+## 即将开赛
+{{matchups}}
+
+## 赛前焦点
+{{focusAnalysis}}
+
+---
+数据来源：[Liquipedia]({{sourceUrl}}) · CC BY-SA 3.0
+```
+
+每日汇总模板必须保留 `{{schedule}}`、`{{focusAnalysis}}`、`{{sourceUrl}}`；赛前提醒模板必须保留 `{{matchups}}`、`{{focusAnalysis}}`、`{{sourceUrl}}`。两者都必须标注 Liquipedia 来源。全局切换到直接发送 Markdown 时，内容生成方式和模板暂不可编辑，只发送固定赛事正文；已保存的选择会保留，切回服务回合投递后生效。投递方式见[根目录说明](../../README.md#全局投递配置)。

@@ -169,6 +169,28 @@ test('服务回合模式按赛事提交模板任务并沿用去重', async () =>
   assert.equal(submitted.length, 4)
 })
 
+test('每日汇总和赛前提醒分别使用对应的服务回合模板', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const match = { id: 'split-template', timestamp: Math.floor((now + 30 * 60_000) / 1000),
+    teamA: 'Team A', teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
+    tournament: 'Test Cup', tournamentPage: '', logoA: null, logoB: null, bestOf: 3 }
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [match], serviceTurn: { dispatch: async ({ text }) => sent.push(text) } })
+  const base = { source: { id: 'liquipedia' }, deliveryMode: 'service-turn', values: { teams: [], tiers: [] }, seen: {}, timeZone: 'Asia/Shanghai',
+    digestTemplate: '# 汇总 {{title}}\n{{schedule}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})',
+    preMatchTemplate: '# 赛前 {{tournament}}\n{{matchups}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})' }
+  const input = { settings: { deliveryMethod: 'service-turn' }, target: { sessionId: 'session-1' }, now: () => now }
+  await provider({ ...input, feature: { ...base, noticeMode: 'daily-digest', digestDay: 'today', seen: {} } })
+  await provider({ ...input, feature: { ...base, noticeMode: 'pre-match', leadMinutes: 60, seen: {} } })
+  assert.equal(sent.length, 2)
+  assert.match(sent[0], /# 汇总 CS2 2026-11-09 赛程/)
+  assert.match(sent[0], /## Test Cup[\s\S]*Team A/)
+  assert.match(sent[0], /当天赛程看点/)
+  assert.match(sent[1], /# 赛前 Test Cup/)
+  assert.match(sent[1], /赛前看点/)
+  assert.doesNotMatch(sent[1], /# 汇总/)
+})
+
 test('固定内容通知走服务回合，提交失败不记录已通知', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const match = {

@@ -1,6 +1,6 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
 import { featureTargetOptions } from '../../client/session-options.js'
-import { DEFAULT_CS2_SERVICE_TEMPLATE } from './template.js'
+import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE } from './template.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
   const { useState } = React
@@ -147,6 +147,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [leadMinutesText, setLeadMinutesText] = useState(String(feature.leadMinutes ?? 60))
   const [deliveryMode, setDeliveryMode] = useState(feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct')
   const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
+  const [digestTemplate, setDigestTemplate] = useState(feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE)
+  const [preMatchTemplate, setPreMatchTemplate] = useState(feature.preMatchTemplate ?? DEFAULT_CS2_PRE_MATCH_TEMPLATE)
   const [scheduleMode, setScheduleMode] = useState(feature.scheduleMode === 'cron' ? 'cron' : 'interval')
   const [cronEntries, setCronEntries] = useState(splitCronRules(feature.cron).length > 0 ? splitCronRules(feature.cron) : [''])
   const [busy, setBusy] = useState(false)
@@ -170,6 +172,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     target: { sessionId },
     deliveryMode,
     serviceTemplate,
+    digestTemplate,
+    preMatchTemplate,
     noticeMode,
     digestDay,
     leadMinutes: Number(leadMinutesText) || 60,
@@ -271,7 +275,14 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     ...children,
   )
 
-  const contentSection = configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中生成焦点分析。',
+  const currentTemplate = noticeMode === 'daily-digest' ? digestTemplate : noticeMode === 'pre-match' ? preMatchTemplate : serviceTemplate
+  const updateCurrentTemplate = noticeMode === 'daily-digest' ? setDigestTemplate : noticeMode === 'pre-match' ? setPreMatchTemplate : setServiceTemplate
+  const defaultTemplate = noticeMode === 'daily-digest' ? DEFAULT_CS2_DIGEST_TEMPLATE : noticeMode === 'pre-match' ? DEFAULT_CS2_PRE_MATCH_TEMPLATE : DEFAULT_CS2_SERVICE_TEMPLATE
+  const templateName = noticeMode === 'daily-digest' ? '每日汇总' : noticeMode === 'pre-match' ? '赛前提醒' : '旧版通知'
+  const templateHelp = noticeMode === 'daily-digest'
+    ? '占位符：{{title}}、{{schedule}}、{{focusAnalysis}}、{{sourceUrl}}。保留按赛事分组的赛程、赛事看点与 Liquipedia 来源。'
+    : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与 Liquipedia 来源。'
+  const contentSection = configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中按通知方式生成分析。',
     h('div', { style: styles.field },
       h('span', { style: styles.label }, '内容生成方式'),
       h('div', { style: styles.segmented },
@@ -285,25 +296,25 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
       h('span', { style: styles.desc }, settings?.deliveryMethod === 'upstream-sdk'
         ? '全局当前为直接发送模式：仅发送固定赛事内容；已保存的内容生成方式和模板会保留，切回服务回合投递后生效。'
         : deliveryMode === 'service-turn'
-          ? 'Agent 按模板生成对局与焦点分析；QQ 送达仍受平台限制。'
+          ? `Agent 使用${templateName}模板生成赛程与分析；QQ 送达仍受平台限制。`
           : '已排版的赛事正文通过服务回合提交。'),
     ),
     deliveryMode !== 'service-turn' ? null : h('div', { style: { ...styles.field, marginTop: 14 } },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-        h('span', { style: styles.label }, 'Markdown 模板'),
+        h('span', { style: styles.label }, `${templateName} Markdown 模板`),
         h('button', { type: 'button', style: { ...styles.ghostButton, marginLeft: 'auto', padding: '3px 9px' },
           disabled: settings?.deliveryMethod === 'upstream-sdk',
-          onClick: () => setServiceTemplate(DEFAULT_CS2_SERVICE_TEMPLATE) }, '恢复默认模板'),
+          onClick: () => updateCurrentTemplate(defaultTemplate) }, '恢复默认模板'),
       ),
       h('textarea', {
         style: { ...styles.input, minHeight: 180, resize: 'vertical', fontFamily: 'ui-monospace, monospace', lineHeight: 1.5 },
-        value: serviceTemplate,
+        value: currentTemplate,
         disabled: settings?.deliveryMethod === 'upstream-sdk',
         maxLength: 6000,
-        'aria-label': 'CS2 赛事 Markdown 模板',
-        onChange: (event) => setServiceTemplate(event.target.value),
+        'aria-label': `CS2 ${templateName} Markdown 模板`,
+        onChange: (event) => updateCurrentTemplate(event.target.value),
       }),
-      h('span', { style: styles.desc }, '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。必须保留对局、焦点分析与 Liquipedia 来源；分析仅依据赛事数据和会话上下文。'),
+      h('span', { style: styles.desc }, `${templateHelp}分析仅依据赛事数据和会话上下文。`),
     ),
   )
 
