@@ -3,8 +3,75 @@ import { test } from 'node:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createLiquipediaProvider } from '../modules/cs2-matches/provider.js'
+import { createLiquipediaProvider, previewCs2FixedNotice } from '../modules/cs2-matches/provider.js'
 import { createFeatureRuntime } from '../features.js'
+
+test('三种固定通知使用各自的赛事分组、对阵卡与胜者播报', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const match = (id, tournament, minutes, scoreA = null, scoreB = null, bestOf = 3) => ({
+    id, tournament, tournamentPage: tournament.replaceAll(' ', '_'),
+    timestamp: Math.floor((now + minutes * 60_000) / 1000),
+    teamA: `Team ${id}`, teamB: 'Rival', scoreA, scoreB, finished: scoreA !== null, bestOf,
+  })
+  const scheduled = [match('A', 'First Cup', 30), match('B', 'First Cup', 60, null, null, null), match('C', 'Second Cup', 90)]
+  const finished = [match('A', 'First Cup', -30, 2, 1), match('B', 'First Cup', -60, 1, 1, null),
+    match('C', 'First Cup', -90, 0, 2)]
+  const send = async (noticeMode, matches) => {
+    const sent = []
+    const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+      upstreamSender: { send: async ({ text }) => sent.push(text) } })
+    const feature = { source: { id: 'liquipedia' }, digestDay: 'today', leadMinutes: 120,
+      timeZone: 'Asia/Shanghai', values: { teams: [], tiers: [] }, seen: {} }
+    await provider({ feature, noticeMode, settings: { deliveryMethod: 'upstream-sdk' },
+      target: { sessionId: 'session-1' }, now: () => now })
+    return sent
+  }
+  const digest = (await send('daily-digest', scheduled))[0]
+  assert.match(digest, /CS2 2026-11-09 赛程 · 共 3 场/)
+  assert.match(digest, /## First Cup[\s\S]*Team A[\s\S]*Team B[\s\S]*## Second Cup[\s\S]*Team C/)
+  assert.doesNotMatch(digest, /Bo null|Bo undefined/)
+  const pre = await send('pre-match', scheduled)
+  assert.equal(pre.length, 2)
+  assert.match(pre[0], /即将开赛.*First Cup/)
+  assert.match(pre[0], /Team A[\s\S]*Team B/)
+  assert.match(pre[0], /开赛.*Bo3/)
+  assert.doesNotMatch(pre[0], /Bo null|Bo undefined/)
+  const result = (await send('result', finished))[0]
+  assert.match(result, /已确认赛果.*First Cup/)
+  assert.match(result, /Team A 获胜/)
+  assert.match(result, /Team A.*2\s*:\s*1.*Rival/)
+  assert.match(result, /Team B.*1\s*:\s*1.*Rival/)
+  assert.doesNotMatch(result, /Team B 获胜/)
+  assert.match(result, /Rival 获胜[\s\S]*Team C.*0\s*:\s*2.*Rival/)
+  for (const item of [digest, ...pre, result]) assert.match(item, /Liquipedia.*CC BY-SA 3\.0/)
+})
+
+test('固定通知预览显示三种实际发送格式', () => {
+  assert.match(previewCs2FixedNotice('daily-digest'), /赛程 · 共 1 场/)
+  assert.match(previewCs2FixedNotice('pre-match'), /即将开赛/)
+  assert.match(previewCs2FixedNotice('result'), /队伍 A 获胜/)
+})
+
+test('同一赛事的赛前对阵卡过长时分段且不重复发送', async () => {
+  const now = Date.parse('2026-11-09T10:00:00Z')
+  const matches = Array.from({ length: 24 }, (_, index) => ({
+    id: `pre-${index}`, timestamp: Math.floor((now + (index + 1) * 60_000) / 1000),
+    teamA: `Team-${index}-${'A'.repeat(60)}`, teamB: `Rival-${'B'.repeat(60)}`,
+    tournament: 'Long Cup', tournamentPage: '', bestOf: 3,
+  }))
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, leadMinutes: 60,
+    values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'pre-match', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'session-1' }, now: () => now }
+  assert.equal((await provider(input)).sent, matches.length)
+  assert.ok(sent.length > 1)
+  assert.ok(sent.every((text) => text.length < 1800))
+  assert.ok(sent.every((text) => text.includes('即将开赛｜Long Cup')))
+  assert.equal((await provider(input)).sent, 0)
+})
 
 test('立即检查去重，立即发送重发已通知的匹配赛事', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
@@ -331,7 +398,7 @@ test('固定内容通知走服务回合，提交失败不记录已通知', async
   assert.equal(result.sent, 1)
   assert.equal(feature.seen[`pre:${match.id}`], now)
   assert.equal(submitted[1].sessionId, 'session-1')
-  assert.match(submitted[1].text, /# Test Cup/)
+  assert.match(submitted[1].text, /# ⚔ 即将开赛｜Test Cup/)
   assert.match(submitted[1].text, /Team A.*Team B/s)
   assert.doesNotMatch(submitted[1].text, /\{\{focusAnalysis\}\}/)
   assert.equal((await provider(input)).sent, 0)
@@ -362,7 +429,7 @@ test('全局 SDK 模式发送固定内容，不提交服务回合', async () => 
   const result = await provider(input)
   assert.equal(result.channel, 'qq-sdk')
   assert.equal(sent.length, 1)
-  assert.match(sent[0].text, /# SDK Cup/)
+  assert.match(sent[0].text, /# ⚔ 即将开赛｜SDK Cup/)
   assert.equal(feature.seen[`pre:${match.id}`], now)
 })
 

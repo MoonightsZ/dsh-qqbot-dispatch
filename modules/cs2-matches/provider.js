@@ -201,6 +201,35 @@ function composeSections(matches, tiers, timeZone = 'Asia/Shanghai') {
     })
 }
 
+function composePreMatchSection(group, matches, tiers, timeZone) {
+  const selected = composeSections(matches, tiers, timeZone)[0]
+  const tierLabel = group.tier === undefined || group.tier === 'M' ? '' : ` · 🏆 ${group.tier} 级`
+  const lines = [`# ⚔ 即将开赛｜${group.title}`, '', `共 ${matches.length} 场${tierLabel}`, '']
+  for (const match of matches) {
+    const when = formatDayTime(match.timestamp, timeZone)
+    const bo = Number.isInteger(match.bestOf) && match.bestOf > 0 ? ` · Bo${match.bestOf}` : ''
+    lines.push(`- **${match.teamA} vs ${match.teamB}**`, `  开赛：${when.day} ${when.time}${bo}`)
+  }
+  lines.push('', '---', `数据来源：[Liquipedia](${group.sourceUrl}) · CC BY-SA 3.0`)
+  return { ...selected, markdown: lines.join('\n') }
+}
+
+function composePreMatchSections(matches, tiers, timeZone) {
+  const result = []
+  for (const group of composeSections(matches, tiers, timeZone)) {
+    let batch = []
+    for (const match of group.matches) {
+      const next = [...batch, match]
+      if (batch.length > 0 && composePreMatchSection(group, next, tiers, timeZone).markdown.length > MAX_CHUNK_CHARS - 50) {
+        result.push(composePreMatchSection(group, batch, tiers, timeZone))
+        batch = [match]
+      } else batch = next
+    }
+    if (batch.length > 0) result.push(composePreMatchSection(group, batch, tiers, timeZone))
+  }
+  return result
+}
+
 function calendarDayKey(timestamp, timeZone) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -219,18 +248,21 @@ function digestDayKey(checkedAt, timeZone, digestDay) {
 function composeDailyDigest(matches, tiers, dayKey, timeZone, part = '') {
   const sections = composeSections(matches, tiers, timeZone)
   const scheduleMarkdown = sections.map((section) => section.markdown.split('\n\n---\n')[0].replace(/^# /, '## ')).join('\n')
-  const markdown = [
-    `# CS2 ${dayKey} 赛程${part}`, '', `共 ${matches.length} 场`, '',
-    scheduleMarkdown,
-    '', '---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0',
-  ].join('\n')
-  const text = [
-    `【CS2 ${dayKey} 赛程${part}】共 ${matches.length} 场`,
-    ...sections.map((section) => `【${section.title}】\n${section.text.split('\n').slice(1, -1).join('\n')}`),
-    '数据来源：Liquipedia · CC BY-SA 3.0',
-  ].join('\n')
+  const lines = [`# 📅 CS2 ${dayKey} 赛程${part} · 共 ${matches.length} 场`, '']
+  for (const section of sections) {
+    const tierLabel = section.tier === undefined || section.tier === 'M' ? '' : ` · 🏆 ${section.tier} 级`
+    lines.push(`## ${section.title}${tierLabel}`)
+    for (const match of section.matches) {
+      const when = formatDayTime(match.timestamp, timeZone)
+      const bo = Number.isInteger(match.bestOf) && match.bestOf > 0 ? ` · Bo${match.bestOf}` : ''
+      lines.push(`- ${when.time}｜**${match.teamA}** ⚔ **${match.teamB}**${bo}`)
+    }
+    lines.push('')
+  }
+  lines.push('---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0')
+  const markdown = lines.join('\n')
   return {
-    title: `CS2 ${dayKey} 赛程${part}`, markdown, text, matches,
+    title: `CS2 ${dayKey} 赛程${part}`, markdown, text: markdown, matches,
     matchupsMarkdown: sections.map((section) => section.matchupsMarkdown).join('\n'), scheduleMarkdown,
     sourceUrl: 'https://liquipedia.net/counterstrike',
   }
@@ -257,10 +289,15 @@ function composeResultSection(group, matches, timeZone) {
     const when = formatDayTime(match.timestamp, timeZone)
     return `- 🕒 开赛 **${when.day} ${when.time}**　**${match.teamA} ${match.scoreA} : ${match.scoreB} ${match.teamB}**`
   }).join('\n')
-  const markdown = [
-    `# ${group.title}`, '', `共 ${matches.length} 场赛果`, '',
-    resultsMarkdown, '', '---', `数据来源：[Liquipedia](${group.sourceUrl}) · CC BY-SA 3.0`,
-  ].join('\n')
+  const lines = [`# 🏁 已确认赛果｜${group.title}`, '', `共 ${matches.length} 场`, '']
+  for (const match of matches) {
+    const score = `${match.teamA} **${match.scoreA} : ${match.scoreB}** ${match.teamB}`
+    if (match.scoreA !== match.scoreB) {
+      lines.push(`- 🏆 **${match.scoreA > match.scoreB ? match.teamA : match.teamB} 获胜**`, `  ${score}`)
+    } else lines.push(`- ${score}`)
+  }
+  lines.push('', '---', `数据来源：[Liquipedia](${group.sourceUrl}) · CC BY-SA 3.0`)
+  const markdown = lines.join('\n')
   return { ...group, matches, markdown, text: markdown, resultsMarkdown }
 }
 
@@ -291,7 +328,7 @@ export function previewCs2FixedNotice(mode, timeZone = 'Asia/Shanghai') {
   return mode === 'daily-digest'
     ? composeDailyDigest([match], tiers, calendarDayKey(timestamp * 1000, timeZone), timeZone).markdown
     : mode === 'result' ? composeResultSections([match], tiers, timeZone)[0].markdown
-      : composeSections([match], tiers, timeZone)[0].markdown
+      : composePreMatchSections([match], tiers, timeZone)[0].markdown
 }
 
 /** The one match worth a picture card: the soonest followed team's match in the next day. */
@@ -378,7 +415,7 @@ export function createLiquipediaProvider(options = {}) {
     const sections = noticeMode === 'daily-digest'
       ? composeDailyDigestSections(fresh, tiers, dayKey, timeZone)
       : noticeMode === 'result' ? composeResultSections(fresh, tiers, timeZone)
-      : composeSections(fresh, tiers, timeZone)
+      : composePreMatchSections(fresh, tiers, timeZone)
     const markSeen = (section) => {
       if (noticeMode === 'daily-digest') {
         for (const match of section.matches) feature.seen[`digestmatch:${dayKey}:${match.id}`] = checkedAt
