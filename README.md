@@ -65,7 +65,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 | 模组 | 用途 | 详细说明 |
 | --- | --- | --- |
-| CS2 赛事通知 | 按队伍和等级筛选赛程，提供每日汇总与赛前提醒。 | [查看模组说明](./modules/cs2-matches/README.md) |
+| CS2 赛事通知 | 按队伍和等级筛选比赛，提供每日汇总、赛前提醒与赛果提醒。 | [查看模组说明](./modules/cs2-matches/README.md) |
 | 偶尔闲聊 | 按概率、小时冷却和安静时段，偶尔在指定会话发起聊天。 | [查看模组说明](./modules/casual-chat/README.md) |
 
 ### 全局默认目标会话

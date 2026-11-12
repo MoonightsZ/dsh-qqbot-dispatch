@@ -1,6 +1,6 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
 import { featureTargetOptions } from '../../client/session-options.js'
-import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE } from './template.js'
+import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE } from './template.js'
 import { migrateCs2NoticeRules } from './rules.js'
 import { previewCs2FixedNotice } from './provider.js'
 
@@ -144,13 +144,14 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
   const [noticeRules, setNoticeRules] = useState(migrateCs2NoticeRules(feature, 'daily-digest'))
-  const [noticeMode, setNoticeMode] = useState(feature.noticeMode ?? 'legacy')
+  const [noticeMode, setNoticeMode] = useState(['daily-digest', 'pre-match', 'result'].includes(feature.noticeMode) ? feature.noticeMode : 'daily-digest')
   const [digestDay, setDigestDay] = useState(feature.digestDay === 'today' ? 'today' : 'tomorrow')
   const [leadMinutesText, setLeadMinutesText] = useState(String(feature.leadMinutes ?? 60))
   const [deliveryMode, setDeliveryMode] = useState(feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct')
   const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
   const [digestTemplate, setDigestTemplate] = useState(feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE)
   const [preMatchTemplate, setPreMatchTemplate] = useState(feature.preMatchTemplate ?? DEFAULT_CS2_PRE_MATCH_TEMPLATE)
+  const [resultTemplate, setResultTemplate] = useState(feature.resultTemplate ?? DEFAULT_CS2_RESULT_TEMPLATE)
   const [busy, setBusy] = useState(false)
 
   const updateRule = (mode, patch) => setNoticeRules((current) => ({ ...current, [mode]: { ...current[mode], ...patch } }))
@@ -176,6 +177,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     serviceTemplate,
     digestTemplate,
     preMatchTemplate,
+    resultTemplate,
     noticeMode: feature.noticeMode ?? 'daily-digest',
     noticeRules,
     digestDay,
@@ -197,7 +199,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     if (nextEnabled !== false && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
     if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
     for (const [mode, rule] of Object.entries(noticeRules)) {
-      if (rule.enabled && rule.scheduleMode === 'cron' && describeCron(rule.cron) === null) throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'}的 Cron 规则无效`)
+      if (rule.enabled && rule.scheduleMode === 'cron' && describeCron(rule.cron) === null) throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'}的 Cron 规则无效`)
     }
     const next = await postJson(FEATURES_PATH, payload(nextEnabled, overrides))
     setApiKey('')
@@ -232,7 +234,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
       }
       const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id, noticeMode: mode, ...(forceResend ? { forceResend: true } : {}) })
       const action = forceResend ? '发送' : '检查'
-      const name = mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'
+      const name = mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'
       if (result?.error) onNotice({ kind: 'error', text: `${name} ${action}失败：${result.error}` })
       else if (result?.skipped) onNotice({ kind: 'ok', text: `${name} 正在运行，请稍后重试` })
       else if (forceResend && result?.matched === 0) onNotice({ kind: 'ok', text: `${name} 未找到匹配赛事` })
@@ -266,12 +268,13 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     ...children,
   )
 
-  const currentTemplate = noticeMode === 'daily-digest' ? digestTemplate : noticeMode === 'pre-match' ? preMatchTemplate : serviceTemplate
-  const updateCurrentTemplate = noticeMode === 'daily-digest' ? setDigestTemplate : noticeMode === 'pre-match' ? setPreMatchTemplate : setServiceTemplate
-  const defaultTemplate = noticeMode === 'daily-digest' ? DEFAULT_CS2_DIGEST_TEMPLATE : noticeMode === 'pre-match' ? DEFAULT_CS2_PRE_MATCH_TEMPLATE : DEFAULT_CS2_SERVICE_TEMPLATE
-  const templateName = noticeMode === 'daily-digest' ? '每日汇总' : noticeMode === 'pre-match' ? '赛前提醒' : '旧版通知'
+  const currentTemplate = noticeMode === 'daily-digest' ? digestTemplate : noticeMode === 'pre-match' ? preMatchTemplate : resultTemplate
+  const updateCurrentTemplate = noticeMode === 'daily-digest' ? setDigestTemplate : noticeMode === 'pre-match' ? setPreMatchTemplate : setResultTemplate
+  const defaultTemplate = noticeMode === 'daily-digest' ? DEFAULT_CS2_DIGEST_TEMPLATE : noticeMode === 'pre-match' ? DEFAULT_CS2_PRE_MATCH_TEMPLATE : DEFAULT_CS2_RESULT_TEMPLATE
+  const templateName = noticeMode === 'daily-digest' ? '每日汇总' : noticeMode === 'pre-match' ? '赛前提醒' : '赛果提醒'
   const templateHelp = noticeMode === 'daily-digest'
     ? '占位符：{{title}}、{{schedule}}、{{focusAnalysis}}、{{sourceUrl}}。保留按赛事分组的赛程、赛事看点与 Liquipedia 来源。'
+    : noticeMode === 'result' ? '占位符：{{tournament}}、{{tier}}、{{results}}、{{focusAnalysis}}、{{sourceUrl}}。只依据已确认比分分析，不补造地图或胜负原因。'
     : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与 Liquipedia 来源。'
   const contentLocked = settings?.deliveryMethod === 'upstream-sdk'
   const previewLine = (line, index) => {
@@ -283,7 +286,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     return h('div', { key: index }, text)
   }
   const fixedPreview = (mode) => h('div', { key: mode, style: { ...styles.field, marginTop: 12 } },
-    h('span', { style: styles.label }, `${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'} · 发送内容示例`),
+    h('span', { style: styles.label }, `${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'} · 发送内容示例`),
     h('div', { style: { padding: 12, border: `1px solid ${C.border}`, borderRadius: 8,
       background: C.layer2, color: C.primary, overflowWrap: 'anywhere', fontSize: 12, lineHeight: 1.6 } },
     ...previewCs2FixedNotice(mode, feature.timeZone ?? 'Asia/Shanghai').split('\n').map(previewLine)),
@@ -315,7 +318,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
           h('input', { style: { ...styles.input, flex: '0 1 110px' }, value: leadMinutesText,
             type: 'number', min: 15, max: 360, onChange: (event) => setLeadMinutesText(event.target.value) }),
           h('span', { style: styles.desc }, '分钟（15–360）')),
-      ) : h('p', { style: styles.warningCallout }, '旧版通知没有未来时间上限，建议改用每日汇总或赛前提醒。'),
+      ) : h('p', { style: styles.desc }, '仅发送开赛时间在最近 6 小时内、数据源已标记完赛且有有效比分的比赛；进行中比分不会触发。'),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '检查频率'),
         h('div', { style: styles.segmented },
@@ -361,7 +364,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
       h('p', { style: { ...styles.warnText, color: C.error } }, '全局已选择“直接发送 Markdown”，此模式只发送固定赛事内容，无法设置 AI 焦点分析或编辑模板。请在“配置”页切换为服务回合投递后再设置。'),
       fixedPreview('daily-digest'),
       fixedPreview('pre-match'),
-      noticeRules.legacy ? fixedPreview('legacy') : null,
+      fixedPreview('result'),
     )
     : configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中按通知方式生成分析。',
     h('div', { style: styles.field },
@@ -512,19 +515,19 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         h(TierRange, { options: tierOptions, tiers, onChange: setTiers }),
       ),
     )),
-    configSection('03', '通知规则', '每日汇总与赛前提醒可同时启用；同一场比赛仍会在开赛前收到提醒。',
+    configSection('03', '通知规则', '每日汇总、赛前提醒与赛果提醒可独立启用；同一场比赛可依次收到三种通知。',
       rulePanel('daily-digest', '每日赛程汇总', '按所选日期汇总赛程，每个日期最多自动发送一次。'),
       rulePanel('pre-match', '赛前提醒', '赛事进入提醒窗口后首次检查发送一次；错过开赛不补发。'),
-      noticeRules.legacy ? rulePanel('legacy', '旧版通知', '保留升级前的通知规则，可关闭后迁移到新规则。') : null,
+      rulePanel('result', '赛果提醒', '比赛完赛且比分明确后发送一次，默认每 15 分钟检查。'),
     ),
     contentLocked ? null : configSection('04', '模板选择', '仅选择下方要编辑的模板；不会切换或关闭通知规则。',
-      h('div', { style: styles.segmented },
+      h('div', { style: { ...styles.segmented, display: 'flex', flexWrap: 'wrap', maxWidth: '100%' } },
         h('button', { type: 'button', style: noticeMode === 'daily-digest' ? styles.segOn : styles.seg,
           onClick: () => setNoticeMode('daily-digest') }, '每日汇总模板'),
         h('button', { type: 'button', style: noticeMode === 'pre-match' ? styles.segOn : styles.seg,
           onClick: () => setNoticeMode('pre-match') }, '赛前提醒模板'),
-        noticeRules.legacy ? h('button', { type: 'button', style: noticeMode === 'legacy' ? styles.segOn : styles.seg,
-          onClick: () => setNoticeMode('legacy') }, '旧版通知模板') : null,
+        h('button', { type: 'button', style: noticeMode === 'result' ? styles.segOn : styles.seg,
+          onClick: () => setNoticeMode('result') }, '赛果提醒模板'),
       ),
     ),
     contentSection,

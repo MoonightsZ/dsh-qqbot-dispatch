@@ -1,15 +1,15 @@
 import { cronRules } from '../../cron.js'
 
-export const CS2_RULE_IDS = ['daily-digest', 'pre-match', 'legacy']
+export const CS2_RULE_IDS = ['daily-digest', 'pre-match', 'result']
 
 const DEFAULT_RULES = {
   'daily-digest': { enabled: true, scheduleMode: 'cron', cron: ['0 18 * * *'], intervalMinutes: 1440, lastRunAt: 0, lastResult: null },
   'pre-match': { enabled: false, scheduleMode: 'interval', cron: [], intervalMinutes: 15, lastRunAt: 0, lastResult: null },
-  legacy: { enabled: false, scheduleMode: 'interval', cron: [], intervalMinutes: 60, lastRunAt: 0, lastResult: null },
+  result: { enabled: false, scheduleMode: 'interval', cron: [], intervalMinutes: 15, lastRunAt: 0, lastResult: null },
 }
 
 export function defaultCs2NoticeRules() {
-  return { 'daily-digest': { ...DEFAULT_RULES['daily-digest'], cron: ['0 18 * * *'] }, 'pre-match': { ...DEFAULT_RULES['pre-match'], cron: [] } }
+  return { 'daily-digest': { ...DEFAULT_RULES['daily-digest'], cron: ['0 18 * * *'] }, 'pre-match': { ...DEFAULT_RULES['pre-match'], cron: [] }, result: { ...DEFAULT_RULES.result, cron: [] } }
 }
 
 function normalizeRule(value, id) {
@@ -27,21 +27,24 @@ function normalizeRule(value, id) {
 }
 
 /** Convert the old exclusive mode without enabling any second rule. */
-export function migrateCs2NoticeRules(feature, fallbackMode = 'legacy') {
+export function migrateCs2NoticeRules(feature, fallbackMode = '') {
   const source = feature && typeof feature === 'object' ? feature : {}
   const rules = defaultCs2NoticeRules()
   if (source.noticeRules && typeof source.noticeRules === 'object') {
     rules['daily-digest'].enabled = false
     rules['pre-match'].enabled = false
+    rules.result.enabled = false
     for (const id of CS2_RULE_IDS) {
-      if (id === 'legacy' && source.noticeRules[id] === undefined) continue
       rules[id] = normalizeRule(source.noticeRules[id] ?? rules[id], id)
     }
     return rules
   }
   rules['daily-digest'].enabled = false
   rules['pre-match'].enabled = false
-  const mode = CS2_RULE_IDS.includes(source.noticeMode) ? source.noticeMode : fallbackMode
+  rules.result.enabled = false
+  const mode = CS2_RULE_IDS.includes(source.noticeMode) ? source.noticeMode
+    : CS2_RULE_IDS.includes(fallbackMode) ? fallbackMode : null
+  if (mode === null) return rules
   const fallback = DEFAULT_RULES[mode]
   rules[mode] = normalizeRule({
     ...fallback, enabled: true,

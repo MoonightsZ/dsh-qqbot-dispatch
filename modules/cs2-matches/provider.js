@@ -58,6 +58,9 @@ export function parseMatches(html) {
     if (teams.length < 2) continue
     const tournament = /class="match-info-tournament"[\s\S]*?<a href="\/counterstrike\/([^"#?]+)[^"]*"[^>]*title="([^"]+)"/.exec(chunk)
     const bestOf = /scoreholder-lower">\(Bo(\d+)\)/.exec(chunk)?.[1]
+    const scoreBlock = /class="match-info-header-scoreholder-upper"[^>]*>([\s\S]*?)<span class="match-info-header-scoreholder-lower"/.exec(chunk)?.[1] ?? ''
+    const scores = [...scoreBlock.matchAll(/class="match-info-header-scoreholder-score(?: [^"]*)?"[^>]*>\s*(\d+)\s*<\/span>/g)]
+      .map((match) => Number(match[1]))
     const logos = [...chunk.matchAll(/team-template-image-icon[^>]*>\s*<a[^>]*>\s*<img[^>]*src="([^"]+)"/g)]
       .map((match) => match[1].startsWith('http') ? match[1] : `https://liquipedia.net${match[1]}`)
     rows.push({
@@ -72,6 +75,9 @@ export function parseMatches(html) {
       logoA: logos[0] ?? null,
       logoB: logos[1] ?? null,
       bestOf: bestOf === undefined ? null : Number(bestOf),
+      finished: /data-finished="finished"/.test(chunk),
+      scoreA: scores.length === 2 && scores.every(Number.isSafeInteger) ? scores[0] : null,
+      scoreB: scores.length === 2 && scores.every(Number.isSafeInteger) ? scores[1] : null,
     })
   }
   return rows
@@ -246,17 +252,46 @@ function composeDailyDigestSections(matches, tiers, dayKey, timeZone) {
     batches.length > 1 ? `（${index + 1}/${batches.length}）` : ''))
 }
 
+function composeResultSection(group, matches, timeZone) {
+  const resultsMarkdown = matches.map((match) => {
+    const when = formatDayTime(match.timestamp, timeZone)
+    return `- 🕒 开赛 **${when.day} ${when.time}**　**${match.teamA} ${match.scoreA} : ${match.scoreB} ${match.teamB}**`
+  }).join('\n')
+  const markdown = [
+    `# ${group.title}`, '', `共 ${matches.length} 场赛果`, '',
+    resultsMarkdown, '', '---', `数据来源：[Liquipedia](${group.sourceUrl}) · CC BY-SA 3.0`,
+  ].join('\n')
+  return { ...group, matches, markdown, text: markdown, resultsMarkdown }
+}
+
+function composeResultSections(matches, tiers, timeZone) {
+  const result = []
+  for (const group of composeSections(matches, tiers, timeZone)) {
+    let batch = []
+    for (const match of group.matches) {
+      const next = [...batch, match]
+      if (batch.length > 0 && composeResultSection(group, next, timeZone).markdown.length > MAX_CHUNK_CHARS - 50) {
+        result.push(composeResultSection(group, batch, timeZone))
+        batch = [match]
+      } else batch = next
+    }
+    if (batch.length > 0) result.push(composeResultSection(group, batch, timeZone))
+  }
+  return result
+}
+
 /** Show the fixed Markdown layout with representative data, using the send renderer. */
 export function previewCs2FixedNotice(mode, timeZone = 'Asia/Shanghai') {
-  const timestamp = Math.floor((Date.now() + 24 * 60 * 60_000) / 1000)
+  const timestamp = Math.floor((Date.now() + (mode === 'result' ? -60 * 60_000 : 24 * 60 * 60_000)) / 1000)
   const match = {
     id: 'preview', timestamp, tournament: '示例赛事', tournamentPage: '',
-    teamA: '队伍 A', teamB: '队伍 B', bestOf: 3,
+    teamA: '队伍 A', teamB: '队伍 B', bestOf: 3, finished: true, scoreA: 2, scoreB: 1,
   }
   const tiers = new Map()
   return mode === 'daily-digest'
     ? composeDailyDigest([match], tiers, calendarDayKey(timestamp * 1000, timeZone), timeZone).markdown
-    : composeSections([match], tiers, timeZone)[0].markdown
+    : mode === 'result' ? composeResultSections([match], tiers, timeZone)[0].markdown
+      : composeSections([match], tiers, timeZone)[0].markdown
 }
 
 /** The one match worth a picture card: the soonest followed team's match in the next day. */
@@ -293,7 +328,7 @@ function pruneSeen(feature, checkedAt) {
 export function createLiquipediaProvider(options = {}) {
   const notificationDispatcher = options.notificationDispatcher ?? createNotificationDispatcher(options)
   const readMatches = options.loadMatches ?? loadMatches
-  return async ({ feature, settings, target, now, forceResend = false, noticeMode: requestedNoticeMode }) => {
+  return async ({ feature, settings, target, now, forceResend = false, noticeMode: requestedNoticeMode, eligibleAt }) => {
     const sourceId = feature.source?.id ?? 'none'
     if (sourceId === 'none') return { matched: 0, sent: 0, error: '数据源尚未接入' }
     if (sourceId !== 'liquipedia') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现，请选择 Liquipedia` }
@@ -304,7 +339,8 @@ export function createLiquipediaProvider(options = {}) {
       : (await readMatches())
     if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
 
-    const noticeMode = requestedNoticeMode ?? feature.noticeMode ?? 'legacy'
+    const noticeMode = requestedNoticeMode ?? feature.noticeMode ?? 'daily-digest'
+    if (!['daily-digest', 'pre-match', 'result'].includes(noticeMode)) return { matched: 0, sent: 0, error: '通知规则已移除，请选择当前规则' }
     const timeZone = feature.timeZone ?? 'Asia/Shanghai'
     const dayKey = noticeMode === 'daily-digest' ? digestDayKey(checkedAt, timeZone, feature.digestDay) : ''
     const leadMinutes = Math.min(360, Math.max(15, Number(feature.leadMinutes) || 60))
@@ -315,7 +351,10 @@ export function createLiquipediaProvider(options = {}) {
       if (!matchesTeams(watched, match)) return false
       if (noticeMode === 'daily-digest') return calendarDayKey(at, timeZone) === dayKey
       if (noticeMode === 'pre-match') return at > checkedAt && at <= checkedAt + leadMinutes * 60_000
-      return at >= checkedAt - 6 * 60 * 60_000
+      if (noticeMode === 'result') return at <= checkedAt && at >= (Number.isFinite(eligibleAt) ? Math.min(eligibleAt, checkedAt) : checkedAt) - 6 * 60 * 60_000 &&
+        match.finished === true && Number.isSafeInteger(match.scoreA) && Number.isSafeInteger(match.scoreB) &&
+        match.scoreA >= 0 && match.scoreB >= 0 && match.scoreA + match.scoreB > 0
+      return false
     })
 
     const tiers = new Map()
@@ -331,24 +370,26 @@ export function createLiquipediaProvider(options = {}) {
     const fresh = selected
       .filter((match) => forceResend || (noticeMode === 'daily-digest'
         ? feature.seen[`digest:${dayKey}`] === undefined && feature.seen[`digestmatch:${dayKey}:${match.id}`] === undefined
-        : feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : match.id] === undefined))
+        : feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : `result:${match.id}`] === undefined))
       .sort((left, right) => left.timestamp - right.timestamp)
 
     if (fresh.length === 0) return { matched: selected.length, sent: 0 }
 
     const sections = noticeMode === 'daily-digest'
       ? composeDailyDigestSections(fresh, tiers, dayKey, timeZone)
+      : noticeMode === 'result' ? composeResultSections(fresh, tiers, timeZone)
       : composeSections(fresh, tiers, timeZone)
     const markSeen = (section) => {
       if (noticeMode === 'daily-digest') {
         for (const match of section.matches) feature.seen[`digestmatch:${dayKey}:${match.id}`] = checkedAt
       }
-      else for (const match of section.matches) feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : match.id] = checkedAt
+      else for (const match of section.matches) feature.seen[noticeMode === 'pre-match' ? `pre:${match.id}` : `result:${match.id}`] = checkedAt
     }
     const modeTemplates = migrateCs2ModeTemplates(feature.serviceTemplate)
     const serviceTemplate = noticeMode === 'daily-digest'
       ? feature.digestTemplate ?? modeTemplates.digestTemplate
-      : noticeMode === 'pre-match' ? feature.preMatchTemplate ?? modeTemplates.preMatchTemplate : feature.serviceTemplate
+      : noticeMode === 'pre-match' ? feature.preMatchTemplate ?? modeTemplates.preMatchTemplate
+        : feature.resultTemplate
     let channel = 'service-turn'
     for (const section of sections) {
       const outcome = await notificationDispatcher.dispatch({

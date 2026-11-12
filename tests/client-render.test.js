@@ -180,6 +180,7 @@ test('有功能資料時可繪製設定卡片', () => {
   assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知规则', '模板选择', '通知内容'])
   assert.match(JSON.stringify(view), /每日汇总/)
   assert.match(JSON.stringify(view), /赛前提醒/)
+  assert.doesNotMatch(JSON.stringify(view), /旧版通知/)
   assert.match(JSON.stringify(view), /添加规则/)
   assert.match(JSON.stringify(view), /执行时间/)
   assert.match(JSON.stringify(view), /保存后更新下次执行时间/)
@@ -242,6 +243,35 @@ test('启用赛前提醒不会关闭每日汇总，并保存各自检查计划',
   assert.equal(payload.noticeRules['pre-match'].intervalMinutes, 15)
 })
 
+test('赛果提醒有独立规则与模板，手动发送只指定赛果', async () => {
+  const calls = []
+  let finished
+  const done = new Promise((resolve) => { finished = resolve })
+  const FeatureCard = createFeatureCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (path, body) => { calls.push({ path, body }); return path === '/features'
+      ? { features: [{ id: body.id, enabled: body.enabled }] } : { result: { matched: 1, sent: 1 } } } })
+  const view = FeatureCard({ feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
+    source: { id: 'liquipedia' }, target: { sessionId: 'session-1' }, values: { teams: [], tiers: [] },
+    deliveryMode: 'service-turn', resultTemplate: '# 赛果 {{tournament}}\n{{results}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})',
+    noticeMode: 'result', noticeRules: { result: { enabled: false, scheduleMode: 'interval', intervalMinutes: 15 } }, credential: {} },
+    sessions: [{ sessionId: 'session-1', scope: 'group' }], open: true, onSaved: () => {}, onRun: finished, onNotice: () => {} })
+  const find = (node, predicate) => {
+    if (Array.isArray(node)) return node.map((item) => find(item, predicate)).find(Boolean)
+    if (!node || typeof node !== 'object') return null
+    if (predicate(node)) return node
+    return find(node.children, predicate)
+  }
+  assert.match(JSON.stringify(view), /赛果提醒开关/)
+  assert.match(JSON.stringify(view), /赛果提醒模板/)
+  assert.match(JSON.stringify(view), /\{\{results\}\}/)
+  const panel = find(view, (node) => node.props?.key === 'result')
+  assert.ok(panel)
+  find(panel, (node) => node.type === 'button' && node.children.includes('立即发送')).props.onClick()
+  await done
+  assert.equal(calls[0].body.noticeRules.result.enabled, false)
+  assert.deepEqual(calls[1].body, { id: 'cs2-matches', noticeMode: 'result', forceResend: true })
+})
+
 test('CS2 立即发送先保存当前配置再请求重发', async () => {
   const calls = []
   let finished
@@ -286,7 +316,7 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
   const submitted = []
   let finished
   const done = new Promise((resolve) => { finished = resolve })
-  const template = '# {{tournament}}\n## 对局\n{{matchups}}\n## 焦点分析\n{{focusAnalysis}}\n数据来源：[Liquipedia]({{sourceUrl}})'
+  const template = '# {{title}}\n## 赛程总览\n{{schedule}}\n## 赛事看点\n{{focusAnalysis}}\n数据来源：[Liquipedia]({{sourceUrl}})'
   const FeatureCard = createFeatureCard({
     React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
     postJson: async (_path, body) => {
@@ -298,7 +328,7 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
     feature: {
       id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
       source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
-      deliveryMode: 'service-turn', serviceTemplate: template,
+      deliveryMode: 'service-turn', digestTemplate: template,
       values: { teams: [], tiers: [] }, fields: [], intervalMinutes: 60,
       scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: true,
       credential: { configured: false, writable: false }, lastRunAt: 0,
@@ -322,7 +352,7 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
   nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
   assert.equal(submitted[0].deliveryMode, 'service-turn')
-  assert.equal(submitted[0].serviceTemplate, template)
+  assert.equal(submitted[0].digestTemplate, template)
 })
 
 test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', async () => {
@@ -399,6 +429,8 @@ test('CS2 直接发送模式隐藏内容设置，显示实际排版预览和红�
   assert.match(rendered, /全局已选择“直接发送 Markdown”/)
   assert.match(rendered, /每日汇总 · 发送内容示例/)
   assert.match(rendered, /赛前提醒 · 发送内容示例/)
+  assert.match(rendered, /赛果提醒 · 发送内容示例/)
+  assert.match(rendered, /2 : 1/)
   assert.match(rendered, /队伍 A/)
   assert.match(rendered, /Liquipedia/)
   assert.ok(nodes.some((node) => node.type === 'p' && node.props.style?.color === C.error && node.children[0].includes('无法设置')))

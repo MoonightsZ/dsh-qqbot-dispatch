@@ -1,7 +1,7 @@
 export const definition = {
   id: 'cs2-matches',
   label: 'CS2 赛事通知',
-  description: '按关注队伍与赛事等级筛选赛程，选择每日汇总或赛前提醒，再按全局配置投递通知。',
+  description: '按关注队伍与赛事等级筛选比赛，独立设置每日汇总、赛前提醒和赛果提醒，并按全局配置投递通知。',
   provider: null,
   providerLabel: '未接入',
   fields: [

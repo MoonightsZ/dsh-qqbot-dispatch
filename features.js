@@ -22,8 +22,8 @@ import { cronMatches, cronRules, describeCron, nextCronTime, parseCronList } fro
 import { definition as cs2Matches } from './modules/cs2-matches/definition.js'
 import { definition as casualChat } from './modules/casual-chat/definition.js'
 import {
-  DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE,
-  validateCs2ServiceTemplate, validateCs2DigestTemplate, validateCs2PreMatchTemplate,
+  DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE,
+  validateCs2ServiceTemplate, validateCs2DigestTemplate, validateCs2PreMatchTemplate, validateCs2ResultTemplate,
   migrateCs2ModeTemplates,
 } from './modules/cs2-matches/template.js'
 import { normalizeTopics } from './modules/casual-chat/topics.js'
@@ -33,7 +33,10 @@ export { cronMatches, parseCronList } from './cron.js'
 /** State document shared by every feature toggle. */
 export const STATE_PATH = resolve(homedir(), '.dsh-qqbot', 'dispatch-features.json')
 
-const TICK_MS = 60_000
+const TICK_MS = 30_000
+const CS2_DELIVERY_GAP_MS = 30_000
+const CS2_PENDING_TTL_MS = 60 * 60_000
+const CS2_PRIORITY = ['pre-match', 'result', 'daily-digest']
 const MIN_INTERVAL_MINUTES = 15
 const MAX_INTERVAL_MINUTES = 24 * 60
 const MAX_VALUE_LENGTH = 120
@@ -81,6 +84,7 @@ function defaultFeature(entry) {
     ...(entry.id === 'cs2-matches' ? {
       deliveryMode: 'direct', serviceTemplate: DEFAULT_CS2_SERVICE_TEMPLATE,
       digestTemplate: DEFAULT_CS2_DIGEST_TEMPLATE, preMatchTemplate: DEFAULT_CS2_PRE_MATCH_TEMPLATE,
+      resultTemplate: DEFAULT_CS2_RESULT_TEMPLATE,
       noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
       noticeRules: defaultCs2NoticeRules(),
     } : {}),
@@ -113,7 +117,7 @@ function readStateFile(entries, statePath) {
       if (feature === null || typeof feature !== 'object') continue
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
       if (id === 'cs2-matches') {
-        if (feature.noticeMode === undefined) base.features[id].noticeMode = 'legacy'
+        if (!CS2_RULE_IDS.includes(feature.noticeMode)) base.features[id].noticeMode = 'daily-digest'
         base.features[id].noticeRules = migrateCs2NoticeRules(feature)
         const migrated = migrateCs2ModeTemplates(feature.serviceTemplate)
         try {
@@ -123,6 +127,11 @@ function readStateFile(entries, statePath) {
         }
         base.features[id].digestTemplate = feature.digestTemplate ?? migrated.digestTemplate
         base.features[id].preMatchTemplate = feature.preMatchTemplate ?? migrated.preMatchTemplate
+        try {
+          base.features[id].resultTemplate = validateCs2ResultTemplate(feature.resultTemplate)
+        } catch {
+          base.features[id].resultTemplate = DEFAULT_CS2_RESULT_TEMPLATE
+        }
       }
       if (id === 'casual-chat') delete base.features[id].chatSentAt
       if (id === 'casual-chat' && feature.values !== null && typeof feature.values === 'object') {
@@ -200,7 +209,8 @@ export function configFromInput(entry, input) {
       serviceTemplate: validateCs2ServiceTemplate(source.serviceTemplate),
       digestTemplate: validateCs2DigestTemplate(source.digestTemplate ?? migrateCs2ModeTemplates(source.serviceTemplate).digestTemplate),
       preMatchTemplate: validateCs2PreMatchTemplate(source.preMatchTemplate ?? migrateCs2ModeTemplates(source.serviceTemplate).preMatchTemplate),
-      noticeMode: ['daily-digest', 'pre-match', 'legacy'].includes(source.noticeMode) ? source.noticeMode : 'daily-digest',
+      resultTemplate: validateCs2ResultTemplate(source.resultTemplate),
+      noticeMode: CS2_RULE_IDS.includes(source.noticeMode) ? source.noticeMode : 'daily-digest',
       digestDay: source.digestDay === 'today' ? 'today' : 'tomorrow',
       leadMinutes: clamp(Number(source.leadMinutes) || 60, 15, 360),
       noticeRules: migrateCs2NoticeRules(source, 'daily-digest'),
@@ -238,6 +248,7 @@ function publicFeature(entry, feature, statePath, credential) {
       serviceTemplate: feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE,
       digestTemplate: feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE,
       preMatchTemplate: feature.preMatchTemplate ?? DEFAULT_CS2_PRE_MATCH_TEMPLATE,
+      resultTemplate: feature.resultTemplate ?? DEFAULT_CS2_RESULT_TEMPLATE,
       noticeMode: feature.noticeMode ?? 'daily-digest',
       digestDay: feature.digestDay === 'today' ? 'today' : 'tomorrow',
       leadMinutes: feature.leadMinutes ?? 60,
@@ -330,7 +341,7 @@ export function createFeatureRuntime(options) {
     if (id === 'cs2-matches') {
       for (const [mode, rule] of Object.entries(submitted.noticeRules)) {
         if (rule.enabled && rule.scheduleMode === 'cron' && parseCronList(rule.cron) === undefined) {
-          throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '旧版通知'}的 Cron 规则无效`)
+          throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'}的 Cron 规则无效`)
         }
       }
     }
@@ -354,13 +365,20 @@ export function createFeatureRuntime(options) {
       }
     }
     Object.assign(feature, submitted)
+    if (id === 'cs2-matches') {
+      feature.pendingNoticeModes = submitted.enabled
+        ? Object.fromEntries(Object.entries(feature.pendingNoticeModes ?? {})
+          .filter(([mode]) => submitted.noticeRules[mode]?.enabled === true))
+        : {}
+      if (!submitted.enabled) feature.nextCs2DeliveryAt = 0
+    }
     state.features[id] = feature
     writeStateFile(statePath, state)
     return publicFeature(entry, feature, statePath, await credentialStatus(id))
   }
 
   /** A provider may later fill this in; until then a run only records the gap. */
-  function run(id, { manual = false, forceResend = false, noticeMode } = {}) {
+  function run(id, { manual = false, forceResend = false, noticeMode, eligibleAt } = {}) {
     const entry = descriptor(id, entries)
     const state = read()
     const feature = state.features[id] ?? defaultFeature(entry)
@@ -394,7 +412,7 @@ export function createFeatureRuntime(options) {
       .then(async () => {
         const sessionId = String(feature.target?.sessionId ?? '').trim() || state.settings.defaultTargetSessionId
         if (sessionId === '') throw new Error('未选择目标会话')
-        const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend, ...(mode === undefined ? {} : { noticeMode: mode }) })
+        const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend, ...(mode === undefined ? {} : { noticeMode: mode }), ...(Number.isFinite(eligibleAt) ? { eligibleAt } : {}) })
         result.matched = Number(outcome?.matched ?? 0)
         result.sent = Number(outcome?.sent ?? 0)
         if (typeof outcome?.error === 'string') result.error = outcome.error
@@ -444,14 +462,32 @@ export function createFeatureRuntime(options) {
       if (!providers.has(entry.id)) continue
       if (entry.id === 'cs2-matches') {
         const at = now()
-        for (const [mode, rule] of Object.entries(migrateCs2NoticeRules(feature))) {
+        const rules = migrateCs2NoticeRules(feature)
+        const pending = Object.fromEntries(Object.entries(feature.pendingNoticeModes ?? {})
+          .filter(([mode, dueAt]) => rules[mode]?.enabled === true && Number.isFinite(dueAt) && dueAt > 0 &&
+            dueAt <= at && at - dueAt <= CS2_PENDING_TTL_MS))
+        for (const [mode, rule] of Object.entries(rules)) {
           if (!rule.enabled) continue
           if (rule.scheduleMode === 'cron') {
             const list = parseCronList(rule.cron)
             if (list === undefined || !list.some((sets) => cronMatches(sets, new Date(at), feature.timeZone ?? 'Asia/Shanghai'))) continue
             if (rule.lastRunAt !== 0 && Math.floor(rule.lastRunAt / 60_000) === Math.floor(at / 60_000)) continue
           } else if (at - rule.lastRunAt < rule.intervalMinutes * 60_000) continue
-          await Promise.resolve(run(entry.id, { noticeMode: mode })).catch(() => {})
+          if (pending[mode] === undefined) pending[mode] = at
+        }
+        const queued = read()
+        queued.features[entry.id].pendingNoticeModes = pending
+        writeStateFile(statePath, queued)
+        if (running.has(entry.id) || at < Number(queued.features[entry.id].nextCs2DeliveryAt ?? 0)) continue
+        for (const mode of CS2_PRIORITY.filter((id) => pending[id] !== undefined)) {
+          const result = await Promise.resolve(run(entry.id, { noticeMode: mode, eligibleAt: pending[mode] })).catch(() => ({ error: '检查失败' }))
+          if (result?.skipped === true && result.reason === 'running') break
+          delete pending[mode]
+          const latest = read()
+          latest.features[entry.id].pendingNoticeModes = { ...pending }
+          if (result?.sent > 0) latest.features[entry.id].nextCs2DeliveryAt = now() + CS2_DELIVERY_GAP_MS
+          writeStateFile(statePath, latest)
+          if (result?.sent > 0) break
         }
         continue
       }
