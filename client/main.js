@@ -307,7 +307,7 @@ function DispatchSessionsPage() {
           features === null
             ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
             : h(GlobalTargetSettings, {
-              key: features.settings?.defaultTargetSessionId ?? '',
+              key: JSON.stringify(features.settings?.defaultTargetSessionIds ?? []),
               settings: features.settings,
               features: features.features,
               sessions,

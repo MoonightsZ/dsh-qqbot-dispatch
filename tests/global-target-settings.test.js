@@ -9,10 +9,10 @@ const React = { useState: (initial) => [initial, () => {}] }
 test('全局目标设置显示继承模组和独立覆盖的区别', () => {
   const GlobalTargetSettings = createGlobalTargetSettings({ React, h, styles, postJson: async () => {}, SETTINGS_PATH: '/settings' })
   const view = GlobalTargetSettings({
-    settings: { defaultTargetSessionId: 'shared' },
+    settings: { defaultTargetSessionIds: ['shared'] },
     features: [
-      { id: 'cs2', label: 'CS2 赛事通知', enabled: true, target: { sessionId: '' } },
-      { id: 'chat', label: '偶尔闲聊', enabled: true, target: { sessionId: 'chat-only' } },
+      { id: 'cs2', label: 'CS2 赛事通知', enabled: true, target: { sessionIds: [] } },
+      { id: 'chat', label: '偶尔闲聊', enabled: true, target: { sessionIds: ['chat-only'] } },
     ],
     sessions: [{ sessionId: 'shared', title: '通知群', scope: 'group' }],
     onSaved: () => {}, onNotice: () => {},
@@ -40,8 +40,8 @@ test('全局目标设置需显式保存，并阻止清空启用模组正在继�
     postJson: async (path, body) => { calls.push([path, body]); return { settings: { deliveryMethod: 'service-turn', ...body } } },
   })
   const props = {
-    settings: { defaultTargetSessionId: 'old', deliveryMethod: 'service-turn' },
-    features: [{ id: 'cs2', label: 'CS2', enabled: true, target: { sessionId: '' } }],
+    settings: { defaultTargetSessionIds: ['old'], deliveryMethod: 'service-turn' },
+    features: [{ id: 'cs2', label: 'CS2', enabled: true, target: { sessionIds: [] } }],
     sessions: [
       { sessionId: 'old', title: '旧群', scope: 'group' },
       { sessionId: 'new', title: '新群', scope: 'group' },
@@ -62,13 +62,13 @@ test('全局目标设置需显式保存，并阻止清空启用模组正在继�
   }
   let view = render()
   assert.equal(nodes(view).find((node) => node.type === 'button' && node.children.includes('保存默认目标')).props.disabled, true)
-  nodes(view).find((node) => node.type === 'select').props.onChange({ target: { value: 'new' } })
+  nodes(view).find((node) => node.type?.name === 'TargetPicker').props.onChange(['new'])
   view = render()
   nodes(view).find((node) => node.type === 'button' && node.children.includes('保存默认目标')).props.onClick()
   await done
-  assert.deepEqual(calls, [['/settings', { defaultTargetSessionId: 'new' }]])
+  assert.deepEqual(calls, [['/settings', { defaultTargetSessionIds: ['new'] }]])
 
-  nodes(view).find((node) => node.type === 'select').props.onChange({ target: { value: '' } })
+  nodes(view).find((node) => node.type?.name === 'TargetPicker').props.onChange([])
   view = render()
   assert.match(JSON.stringify(view), /请先为已启用的继承模组指定独立目标/)
   assert.equal(nodes(view).find((node) => node.type === 'button' && node.children.includes('保存默认目标')).props.disabled, true)

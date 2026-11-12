@@ -52,7 +52,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 ### 会话管理
 
-侧栏「会话」页显示 QQ Bot 已映射会话的标题和活跃状态。页面可见时每 20 秒重读列表，目标会话下拉框获得焦点时也会刷新选项。
+侧栏「会话」页显示 QQ Bot 已映射会话的标题和活跃状态。页面可见时每 20 秒重读列表；打开目标会话选择器或点击「刷新选项」也会更新候选会话，未保存的选择会保留。
 
 | 操作 | 效果 |
 | --- | --- |
@@ -61,7 +61,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 ### 功能模组
 
-「功能」页采用模组导航与配置区；配置区较窄时导航移到上方。切换模组不会清空尚未保存的表单。模组的「目标会话」留空时继承「配置」页的全局默认目标；也可为模组单独指定会话。
+「功能」页采用模组导航与配置区；配置区较窄时导航移到上方。切换模组不会清空尚未保存的表单。模组的「目标会话」留空时继承「配置」页的整组全局默认目标；也可为模组单独选择一组目标，整体覆盖全局设置。
 
 | 模组 | 用途 | 详细说明 |
 | --- | --- | --- |
@@ -70,7 +70,9 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 ### 全局默认目标会话
 
-在「配置」页选择默认目标后，未单独指定目标的模组会继承该会话。页面会列出继承此设置的模组；修改默认目标会影响这些模组，已有独立目标保持不变。若已启用的模组仍在继承，须先为其指定独立目标或关闭模组，才能清空默认目标。
+在「配置」页可同时选择群聊和私聊，每组最多 20 个目标。目标须先向 QQ Bot 发过消息，进入会话列表。选择器支持搜索、勾选、移除和刷新；已失效会话可移除，不能重新勾选。
+
+未单独指定目标的模组会继承整组全局默认目标。页面会列出继承此设置的模组；修改默认目标会影响这些模组，已有独立目标保持不变。若已启用的模组仍在继承，须先为其指定独立目标或关闭模组，才能清空默认目标。运行时按目标顺序处理；一个目标失败不阻止其他目标，结果会显示部分成功与失败目标。
 
 ### 全局投递配置
 
@@ -81,7 +83,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 | 服务回合投递（默认） | 固定赛事内容由 Agent 尽量原样输出；选择“AI 焦点分析”时，Agent 填充模板并生成分析。 | Agent 结合会话上下文生成开场白。 |
 | 直接发送 Markdown | 调用上游 Bot 实例的 `sendMarkdown` 发送固定赛事正文；模板和焦点分析暂不生效。 | 将选中的话题作为开场白原文发送。 |
 
-全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.defaultTargetSessionId` 和 `settings.deliveryMethod` 中。各投递方式的限制见下方「资料与限制」。
+全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.defaultTargetSessionIds` 和 `settings.deliveryMethod` 中；模组的独立目标保存在 `target.sessionIds`。旧单目标配置会自动迁移。各投递方式的限制见下方「资料与限制」。
 
 ## 常见问题
 
@@ -169,7 +171,7 @@ modules/<模组 ID>/
 
 `module.json` 只接受清单字段，扫描时不会执行模组代码。目录名须与清单 `id` 一致；新目录需要重启插件才能被发现。设置页使用通用配置卡片，不读取扩展模组的浏览器脚本。扩展模组不需要单独的 `cordis.patch.yml`：插件包根目录的补丁负责加载整个插件。
 
-`createProvider({ notificationDispatcher })` 返回的函数接收 `{ feature, settings, target, ctx, now, manual, forceResend }`，返回 `{ matched, sent, error?, channel? }`。新增模组默认关闭；只有用户手动启用后，调度或“立即运行”才会首次加载 `provider.js`。模组可通过 `notificationDispatcher` 遵循全局投递方式。内置的 CS2 与闲聊模组仍保留各自的专用设置卡片和 provider。
+`createProvider({ notificationDispatcher })` 返回的函数接收 `{ feature, settings, target, ctx, now, manual, forceResend }`，返回 `{ matched, sent, error?, channel? }`。运行时按目标顺序调用 provider，每次 `target.sessionId` 仍是单个会话；结果通过 `targetResults` 汇总。内置模组的去重与冷却按会话隔离，扩展模组的自定义持久状态仍须自行按会话管理。新增模组默认关闭；只有用户手动启用后，调度或“立即运行”才会首次加载 `provider.js`。模组可通过 `notificationDispatcher` 遵循全局投递方式。内置的 CS2 与闲聊模组仍保留各自的专用设置卡片和 provider。
 
 统一接口便于校验清单和控制启停，但不是安全沙箱。`provider.js` 是普通 Node.js 代码，一旦加载便拥有宿主进程的权限；只应安装并启用自己检查过来源和代码的模组。若要运行未经审核的第三方代码，需另行设计进程隔离与能力限制。
 

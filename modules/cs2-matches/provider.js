@@ -428,17 +428,27 @@ export function createLiquipediaProvider(options = {}) {
       : noticeMode === 'pre-match' ? feature.preMatchTemplate ?? modeTemplates.preMatchTemplate
         : feature.resultTemplate
     let channel = 'service-turn'
+    let submitted = 0
     for (const section of sections) {
-      const outcome = await notificationDispatcher.dispatch({
-        settings,
-        sessionId: target.sessionId,
-        markdown: section.markdown,
-        servicePrompt: () => feature.deliveryMode === 'service-turn'
-          ? composeCs2ServiceTurnPrompt(section, serviceTemplate, pickFocus(section.matches, watched, now()) ?? section.matches[0], noticeMode)
-          : composeCs2FixedNoticePrompt(section.markdown),
-      })
+      let outcome
+      try {
+        outcome = await notificationDispatcher.dispatch({
+          settings,
+          sessionId: target.sessionId,
+          markdown: section.markdown,
+          servicePrompt: () => feature.deliveryMode === 'service-turn'
+            ? composeCs2ServiceTurnPrompt(section, serviceTemplate, pickFocus(section.matches, watched, now()) ?? section.matches[0], noticeMode)
+            : composeCs2FixedNoticePrompt(section.markdown),
+        })
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error))
+        failure.matched = selected.length
+        failure.sent = submitted
+        throw failure
+      }
       channel = outcome.channel
       markSeen(section)
+      submitted += section.matches.length
     }
     if (noticeMode === 'daily-digest') feature.seen[`digest:${dayKey}`] = checkedAt
 

@@ -19,7 +19,7 @@ const common = createCommon({ h, C, styles })
 test('扩展模组使用通用卡片，关闭时不能立即运行', () => {
   const ExtensionCard = createExtensionCard({ React, h, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
   const view = ExtensionCard({
-    feature: { id: 'sample-alert', label: '示例通知', extension: true, enabled: false, target: { sessionId: '' }, fields: [], values: {} },
+    feature: { id: 'sample-alert', label: '示例通知', extension: true, enabled: false, target: { sessionIds: [] }, fields: [], values: {} },
     sessions: [], onSaved: () => {}, onRun: () => {}, onNotice: () => {},
   })
   assert.match(JSON.stringify(view), /同一进程运行/)
@@ -30,21 +30,21 @@ test('扩展模组使用通用卡片，关闭时不能立即运行', () => {
 
 test('三个模组均显示继承的全局默认目标', () => {
   const sessions = [{ sessionId: 'session-shared', scope: 'group', title: '通知群' }]
-  const settings = { defaultTargetSessionId: 'session-shared', deliveryMethod: 'service-turn' }
+  const settings = { defaultTargetSessionIds: ['session-shared'], deliveryMethod: 'service-turn' }
   const commonProps = { sessions, settings, open: true, onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {} }
   const cards = [
     createFeatureCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })({
-      ...commonProps, feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, target: { sessionId: '' }, source: { id: 'none' }, values: { teams: [], tiers: [] }, fields: [], credential: {} },
+      ...commonProps, feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, target: { sessionIds: [] }, source: { id: 'none' }, values: { teams: [], tiers: [] }, fields: [], credential: {} },
     }),
     createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })({
-      ...commonProps, feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: '' }, values: {} },
+      ...commonProps, feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionIds: [] }, values: {} },
     }),
     createExtensionCard({ React, h, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })({
-      ...commonProps, feature: { id: 'sample-alert', label: '示例通知', enabled: false, target: { sessionId: '' }, fields: [], values: {} },
+      ...commonProps, feature: { id: 'sample-alert', label: '示例通知', enabled: false, target: { sessionIds: [] }, fields: [], values: {} },
     }),
   ]
   for (const card of cards) {
-    assert.match(JSON.stringify(card), /使用全局默认（通知群/)
+    assert.match(JSON.stringify(card), /通知群/)
     assert.match(JSON.stringify(card), /会话设置在「配置」页/)
   }
 })
@@ -76,7 +76,7 @@ test('群不可用的会话仍可见并提示重新同步', () => {
 test('偶尔闲聊使用独立设置卡片', () => {
   const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
   const view = ChatCard({
-    feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: '' }, scheduleMode: 'cron', cron: ['0 19 * * *'], timeZone: 'Asia/Shanghai', nextRunAt: Date.parse('2026-11-09T11:00:00Z'), values: { chancePercent: '30', cooldownHours: '72', quietStart: '22', quietEnd: '9', topics: '' }, lastRunAt: 0 },
+    feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionIds: [] }, scheduleMode: 'cron', cron: ['0 19 * * *'], timeZone: 'Asia/Shanghai', nextRunAt: Date.parse('2026-11-09T11:00:00Z'), values: { chancePercent: '30', cooldownHours: '72', quietStart: '22', quietEnd: '9', topics: '' }, lastRunAt: 0 },
     sessions: [], open: true, onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {},
   })
   assert.equal(view.type, 'div')
@@ -86,7 +86,7 @@ test('偶尔闲聊使用独立设置卡片', () => {
   assert.match(JSON.stringify(view), /话题池/)
   assert.match(JSON.stringify(view), /AI 推荐/)
   assert.match(JSON.stringify(view), /下次计划执行/)
-  assert.match(JSON.stringify(view), /刷新选项/)
+  assert.match(JSON.stringify(view), /TargetPicker|inheritLabel/)
 })
 
 test('AI 候选须手选加入话题池，保存后才进入配置', async () => {
@@ -105,7 +105,7 @@ test('AI 候选须手选加入话题池，保存后才进入配置', async () =>
     readJson: async () => ({ models: [{ provider: 'one', model: 'a', label: '模型 A' }] }),
     postJson: async (path, body) => path === '/chat/recommend' ? { topics: ['来聊 CS2 吗？'] } : (payload = body, { features: [{ id: body.id, enabled: body.enabled }] }),
   })
-  const props = { feature: { id: 'casual-chat', label: '偶尔闲聊', target: { sessionId: 'session-1' }, values: { topics: [] }, cron: ['0 19 * * *'] },
+  const props = { feature: { id: 'casual-chat', label: '偶尔闲聊', target: { sessionIds: ['session-1'] }, values: { topics: [] }, cron: ['0 19 * * *'] },
     sessions: [{ sessionId: 'session-1', title: '群', scope: 'group' }], open: true, onSaved: saved, onRun: () => {}, onNotice: () => {} }
   const render = () => { cursor = 0; return ChatCard(props) }
   const find = (view, predicate) => {
@@ -141,7 +141,7 @@ test('话题全部禁用时立即发起提示跳过', async () => {
   const done = new Promise((resolve) => { finished = resolve })
   const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
     postJson: async (path, body) => path === '/features' ? { features: [{ id: body.id, enabled: false }] } : { result: { sent: 0, warning: '话题池没有启用的话题，已跳过闲聊' } } })
-  const view = ChatCard({ feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionId: 'session-1' }, values: { topics: [{ id: 'a', text: '话题', tags: [], enabled: false }] } },
+  const view = ChatCard({ feature: { id: 'casual-chat', label: '偶尔闲聊', enabled: false, target: { sessionIds: ['session-1'] }, values: { topics: [{ id: 'a', text: '话题', tags: [], enabled: false }] } },
     sessions: [{ sessionId: 'session-1', scope: 'group' }], open: true, onSaved: () => {}, onRun: finished, onNotice: (notice) => notices.push(notice) })
   const visit = (node) => {
     if (Array.isArray(node)) return node.map(visit).find(Boolean)
@@ -159,7 +159,7 @@ test('有功能資料時可繪製設定卡片', () => {
   const view = FeatureCard({
     feature: {
       id: 'cs2-matches', label: 'CS2 賽事通知', enabled: false,
-      source: { id: 'none', baseUrl: '' }, sources: [], target: { sessionId: '' },
+      source: { id: 'none', baseUrl: '' }, sources: [], target: { sessionIds: [] },
       values: { teams: [], tiers: [] }, fields: [
         { key: 'teams', kind: 'list', label: '隊伍' },
         { key: 'tiers', kind: 'options', label: '等級', options: ['S', 'A'] },
@@ -184,7 +184,7 @@ test('有功能資料時可繪製設定卡片', () => {
   assert.match(JSON.stringify(view), /添加规则/)
   assert.match(JSON.stringify(view), /执行时间/)
   assert.match(JSON.stringify(view), /保存后更新下次执行时间/)
-  assert.match(JSON.stringify(view), /刷新选项/)
+  assert.match(JSON.stringify(view), /TargetPicker|inheritLabel/)
 })
 
 test('启用赛前提醒不会关闭每日汇总，并保存各自检查计划', async () => {
@@ -205,7 +205,7 @@ test('启用赛前提醒不会关闭每日汇总，并保存各自检查计划',
   const props = {
     feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
       noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
-      source: { id: 'none' }, target: { sessionId: 'session-1' }, values: { teams: [], tiers: [] }, fields: [],
+      source: { id: 'none' }, target: { sessionIds: ['session-1'] }, values: { teams: [], tiers: [] }, fields: [],
       scheduleMode: 'cron', cron: ['0 18 * * *'], credential: {} },
     sessions: [{ sessionId: 'session-1', title: '通知群', scope: 'group' }], open: true,
     onToggle: () => {}, onSaved: saved, onRun: () => {}, onNotice: () => {},
@@ -251,7 +251,7 @@ test('赛果提醒有独立规则与模板，手动发送只指定赛果', async
     postJson: async (path, body) => { calls.push({ path, body }); return path === '/features'
       ? { features: [{ id: body.id, enabled: body.enabled }] } : { result: { matched: 1, sent: 1 } } } })
   const view = FeatureCard({ feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
-    source: { id: 'liquipedia' }, target: { sessionId: 'session-1' }, values: { teams: [], tiers: [] },
+    source: { id: 'liquipedia' }, target: { sessionIds: ['session-1'] }, values: { teams: [], tiers: [] },
     deliveryMode: 'service-turn', resultTemplate: '# 赛果 {{tournament}}\n{{results}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})',
     noticeMode: 'result', noticeRules: { result: { enabled: false, scheduleMode: 'interval', intervalMinutes: 15 } }, credential: {} },
     sessions: [{ sessionId: 'session-1', scope: 'group' }], open: true, onSaved: () => {}, onRun: finished, onNotice: () => {} })
@@ -288,7 +288,7 @@ test('CS2 立即发送先保存当前配置再请求重发', async () => {
   const view = FeatureCard({
     feature: {
       id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
-      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionIds: ['session-1'] },
       values: { teams: ['Team A'], tiers: [] }, fields: [], intervalMinutes: 60,
       scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: false,
       credential: { configured: false, writable: false }, lastRunAt: 0,
@@ -327,7 +327,7 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
   const view = FeatureCard({
     feature: {
       id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
-      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionIds: ['session-1'] },
       deliveryMode: 'service-turn', digestTemplate: template,
       values: { teams: [], tiers: [] }, fields: [], intervalMinutes: 60,
       scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: true,
@@ -371,7 +371,7 @@ test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', asyn
   const FeatureCard = createFeatureCard({ React: StatefulReact, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
     postJson: async (_path, body) => { payload = body; return { features: [{ id: body.id, enabled: body.enabled }] } } })
   const props = { feature: { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, noticeMode: 'daily-digest', deliveryMode: 'service-turn',
-    digestTemplate, preMatchTemplate, source: { id: 'liquipedia' }, target: { sessionId: 'session-1' }, values: { teams: [], tiers: [] },
+    digestTemplate, preMatchTemplate, source: { id: 'liquipedia' }, target: { sessionIds: ['session-1'] }, values: { teams: [], tiers: [] },
     scheduleMode: 'cron', cron: ['0 18 * * *'], credential: {} },
     sessions: [{ sessionId: 'session-1', scope: 'group' }], open: true, onSaved: saved, onRun: () => {}, onNotice: () => {} }
   const render = () => { cursor = 0; return FeatureCard(props) }
@@ -407,7 +407,7 @@ test('CS2 直接发送模式隐藏内容设置，显示实际排版预览和红�
   const view = FeatureCard({
     feature: {
       id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false,
-      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionId: 'session-1' },
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionIds: ['session-1'] },
       deliveryMode: 'service-turn',
       values: { teams: [], tiers: [] }, fields: [], intervalMinutes: 60,
       scheduleMode: 'interval', cron: [], timeZone: 'Asia/Shanghai', focusCard: true,

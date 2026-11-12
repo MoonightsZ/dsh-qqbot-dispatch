@@ -450,7 +450,11 @@ test('多场赛事提交中途失败时仅记录已提交的赛事', async () =>
     noticeMode: 'pre-match', leadMinutes: 60,
     values: { teams: [], tiers: [] }, seen: {}, focusCard: false,
   }
-  await assert.rejects(provider({ feature, target: { sessionId: 'session-1' }, ctx: {}, now: () => now }), /提交失败/)
+  await assert.rejects(provider({ feature, target: { sessionId: 'session-1' }, ctx: {}, now: () => now }), (error) => {
+    assert.match(error.message, /提交失败/)
+    assert.equal(error.sent, 1)
+    return true
+  })
   assert.equal(feature.seen['pre:match-0'], now)
   assert.equal(feature.seen['pre:match-1'], undefined)
 })

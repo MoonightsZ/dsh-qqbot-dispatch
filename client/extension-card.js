@@ -1,27 +1,30 @@
 import { cronRules } from '../cron.js'
 import { featureTargetOptions } from './session-options.js'
+import { createTargetPicker } from './target-picker.js'
+import { summarizeTargetResults } from './target-results.js'
 
 /** Metadata-only UI for extensions; never import a third-party browser card. */
 export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch }) {
   const { useState } = React
+  const TargetPicker = createTargetPicker({ React, h, styles })
 
   return function ExtensionCard({ feature, settings, sessions, onSaved, onRun, onNotice, onRefreshSessions }) {
     const [enabled, setEnabled] = useState(feature.enabled === true)
-    const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
+    const [sessionIds, setSessionIds] = useState(feature.target?.sessionIds ?? [])
     const [values, setValues] = useState(feature.values ?? {})
     const [scheduleMode, setScheduleMode] = useState(feature.scheduleMode === 'cron' ? 'cron' : 'interval')
     const [intervalMinutes, setIntervalMinutes] = useState(String(feature.intervalMinutes ?? 60))
     const [cronText, setCronText] = useState(cronRules(feature.cron).join('\n'))
     const [busy, setBusy] = useState(false)
-    const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
+    const targetOptions = featureTargetOptions(sessions, sessionIds, settings?.defaultTargetSessionIds ?? [])
 
     const save = async (nextEnabled = enabled) => {
-      if (nextEnabled && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
+      if (nextEnabled && targetOptions.effectiveSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
       if (nextEnabled && targetOptions.invalidSelected) throw new Error('目标会话不可用，请刷新后重新选择')
       const next = await postJson(FEATURES_PATH, {
         id: feature.id,
         enabled: nextEnabled,
-        target: { sessionId },
+        target: { sessionIds },
         source: { id: 'none', baseUrl: '' },
         scheduleMode,
         intervalMinutes: Number(intervalMinutes) || 60,
@@ -39,9 +42,10 @@ export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH,
         await save(nextEnabled)
         if (action === 'run') {
           const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
-          if (result?.error) throw new Error(result.error)
+          const targets = summarizeTargetResults(result, sessions)
+          if (result?.error) throw new Error(`${result.sent > 0 ? '部分完成：' : ''}${targets.failureText || result.error}`)
           onRun()
-          onNotice({ kind: 'ok', text: `${feature.label} 已运行` })
+          onNotice({ kind: 'ok', text: `${feature.label} 已运行${targets.total > 1 ? `，${targets.succeeded}/${targets.total} 个目标已处理` : ''}` })
         } else onNotice({ kind: 'ok', text: `${feature.label} 已保存` })
       } catch (error) {
         onNotice({ kind: 'error', text: `${feature.label} ${action === 'run' ? '运行' : '保存'}失败：${String(error?.message ?? error)}` })
@@ -61,14 +65,10 @@ export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH,
       ),
       h('p', { style: styles.desc }, feature.description),
       h('div', { style: styles.warningCallout }, '启用后将加载此模组的服务端代码；它与 DSH 在同一进程运行。请先检查来源和代码。'),
-      h('label', { style: styles.field }, h('span', { style: styles.label }, '目标会话'),
-        h('select', {
-          style: styles.select, value: sessionId,
-          onChange: (event) => setSessionId(event.target.value),
-          onFocus: () => { void onRefreshSessions?.() },
-        }, h('option', { value: '' }, `使用全局默认（${targetOptions.defaultLabel}）`),
-        ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label)))),
-      h('p', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),
+      h('div', { style: styles.field }, h('span', { style: styles.label }, '目标会话'),
+        h(TargetPicker, { sessions, selectedIds: sessionIds, onChange: setSessionIds, onRefreshSessions,
+          label: '目标会话', inheritLabel: targetOptions.defaultLabel })),
+      h('p', { style: styles.desc }, '会话设置在「配置」页；此处不选择将继承整组全局默认目标。'),
       ...(feature.fields ?? []).map((field) => h('label', { key: field.key, style: styles.field },
         h('span', { style: styles.label }, field.label),
         h('input', {

@@ -1,11 +1,14 @@
 import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../../cron.js'
 import { featureTargetOptions } from '../../client/session-options.js'
+import { createTargetPicker } from '../../client/target-picker.js'
+import { summarizeTargetResults } from '../../client/target-results.js'
 import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE } from './template.js'
 import { migrateCs2NoticeRules } from './rules.js'
 import { previewCs2FixedNotice } from './provider.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
   const { useState } = React
+  const TargetPicker = createTargetPicker({ React, h, styles })
 function splitTeam(text) {
   return String(text ?? '').split(/[,，;；\s]+/).map((item) => item.trim()).filter((item) => item !== '')
 }
@@ -121,7 +124,8 @@ function featureStatus(feature) {
   const result = feature.lastResult
   if (feature.lastRunAt === 0) return { text: '尚未检查', error: false }
   if (result !== null && result !== undefined && result.error) {
-    return { text: `${formatRelative(feature.lastRunAt)} · 检查失败：${result.error}`, error: true }
+    const partial = result.sent > 0 ? `部分完成 · 已提交 ${result.sent} 条通知 · ` : ''
+    return { text: `${formatRelative(feature.lastRunAt)} · ${partial}部分目标失败：${result.error}`, error: true }
   }
   const channel = result?.channel === 'qq-sdk' ? ' · 已调用上游发送' : result?.channel === 'service-turn' ? ' · 已提交服务回合' : ''
   const warning = typeof result?.warning === 'string' && result.warning !== '' ? ` · ${result.warning}` : ''
@@ -138,7 +142,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [teams, setTeams] = useState(Array.isArray(values.teams) ? values.teams : [])
   const [teamDraft, setTeamDraft] = useState('')
   const [tiers, setTiers] = useState(Array.isArray(values.tiers) ? values.tiers : [])
-  const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
+  const [sessionIds, setSessionIds] = useState(feature.target?.sessionIds ?? [])
   const [sourceId, setSourceId] = useState(feature.source?.id ?? 'custom')
   const [baseUrl, setBaseUrl] = useState(feature.source?.baseUrl ?? '')
   const [apiKey, setApiKey] = useState('')
@@ -172,7 +176,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const payload = (nextEnabled, overrides) => ({
     id: feature.id,
     enabled: nextEnabled === undefined ? enabled : nextEnabled,
-    target: { sessionId },
+    target: { sessionIds },
     deliveryMode,
     serviceTemplate,
     digestTemplate,
@@ -196,7 +200,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   })
 
   const persist = async (nextEnabled, overrides) => {
-    if (nextEnabled !== false && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
+    if (nextEnabled !== false && targetOptions.effectiveSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
     if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
     for (const [mode, rule] of Object.entries(noticeRules)) {
       if (rule.enabled && rule.scheduleMode === 'cron' && describeCron(rule.cron) === null) throw new Error(`${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'}的 Cron 规则无效`)
@@ -228,18 +232,19 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     try {
       if (forceResend) await persist()
       else {
-        const savedTarget = featureTargetOptions(sessions, feature.target?.sessionId ?? '', settings?.defaultTargetSessionId ?? '')
-        if (savedTarget.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
-        if (savedTarget.invalidSelected) throw new Error(savedTarget.unavailableSelected ? '已保存的目标群不可用，请先同步群名确认' : '已保存的目标会话已失效，请重新选择并保存')
+        const savedTarget = featureTargetOptions(sessions, feature.target?.sessionIds ?? [], settings?.defaultTargetSessionIds ?? [])
+        if (savedTarget.effectiveSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
       }
       const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id, noticeMode: mode, ...(forceResend ? { forceResend: true } : {}) })
       const action = forceResend ? '发送' : '检查'
       const name = mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'
-      if (result?.error) onNotice({ kind: 'error', text: `${name} ${action}失败：${result.error}` })
+      const targets = summarizeTargetResults(result, sessions)
+      const targetCount = targets.total > 1 ? `，${targets.succeeded}/${targets.total} 个目标已处理` : ''
+      if (result?.error) onNotice({ kind: 'error', text: `${name} ${action}${result.sent > 0 ? '部分完成' : '失败'}：${result.sent ?? 0} 条通知已${result.channel === 'service-turn' ? '提交' : '调用发送'}${targetCount}；${targets.failureText || result.error}` })
       else if (result?.skipped) onNotice({ kind: 'ok', text: `${name} 正在运行，请稍后重试` })
       else if (forceResend && result?.matched === 0) onNotice({ kind: 'ok', text: `${name} 未找到匹配赛事` })
-      else if (result?.channel === 'service-turn') onNotice({ kind: 'ok', text: `${name} 已提交 ${result?.sent ?? 0} 场赛事的服务回合，QQ 送达待确认` })
-      else onNotice({ kind: 'ok', text: `${name} ${action}完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}` })
+      else if (result?.channel === 'service-turn') onNotice({ kind: 'ok', text: `${name} 已提交 ${result?.sent ?? 0} 场赛事的服务回合${targetCount}，QQ 送达待确认` })
+      else onNotice({ kind: 'ok', text: `${name} ${action}完成：匹配 ${result?.matched ?? 0}，发送 ${result?.sent ?? 0}${targetCount}` })
       onRun()
     } catch (failure) {
       onNotice({ kind: 'error', text: `${feature.label} ${forceResend ? '发送' : '检查'}失败：${String(failure?.message ?? failure)}` })
@@ -250,7 +255,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
 
   const status = featureStatus(feature)
   const tierOptions = feature.fields?.find((field) => field.kind === 'options')?.options ?? []
-  const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
+  const targetOptions = featureTargetOptions(sessions, sessionIds, settings?.defaultTargetSessionIds ?? [])
 
   const collapse = (event) => {
     event?.stopPropagation?.()
@@ -487,18 +492,10 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     configSection('02', '通知目标与赛事', '选择接收通知的会话，并设置赛事筛选条件。', h('div', { style: styles.grid },
       h('div', { style: { ...styles.field, gridColumn: '1 / -1' } },
         h('span', { style: styles.label }, '目标会话'),
-        h('div', { style: { display: 'flex', gap: 6 } },
-          h('select', {
-            style: { ...styles.select, flex: 1, minWidth: 0 },
-            value: sessionId,
-            onChange: (event) => setSessionId(event.target.value),
-            onFocus: () => { void onRefreshSessions?.() },
-          },
-          h('option', { value: '' }, `使用全局默认（${targetOptions.defaultLabel}）`),
-          ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
-          h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项')),
+        h(TargetPicker, { sessions, selectedIds: sessionIds, onChange: setSessionIds, onRefreshSessions,
+          label: '目标会话', inheritLabel: targetOptions.defaultLabel }),
         targetOptions.invalidSelected ? h('span', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
-        h('span', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),
+        h('span', { style: styles.desc }, '会话设置在「配置」页；此处不选择将继承整组全局默认目标。'),
       ),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '关注队伍（回车添加，留空=全部）'),

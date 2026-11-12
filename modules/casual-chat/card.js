@@ -1,14 +1,17 @@
 import { cronRules, formatZonedTime } from '../../cron.js'
 import { featureTargetOptions } from '../../client/session-options.js'
+import { createTargetPicker } from '../../client/target-picker.js'
+import { summarizeTargetResults } from '../../client/target-results.js'
 import { DEFAULT_TOPICS, MAX_TOPICS, normalizeTopics } from './topics.js'
 
 export function createChatCard({ React, h, C, styles, formatRelative, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, TOPIC_MODELS_PATH, TOPIC_RECOMMEND_PATH, Switch }) {
   const { useState } = React
+  const TargetPicker = createTargetPicker({ React, h, styles })
 
   function ChatCard({ feature, settings, sessions, open, navigationMode = false, onToggle, onSaved, onRun, onNotice, onRefreshSessions }) {
     const values = feature.values ?? {}
     const [enabled, setEnabled] = useState(feature.enabled === true)
-    const [sessionId, setSessionId] = useState(feature.target?.sessionId ?? '')
+    const [sessionIds, setSessionIds] = useState(feature.target?.sessionIds ?? [])
     const [checkTime, setCheckTime] = useState((() => {
       const [minute, hour] = (cronRules(feature.cron)[0] ?? '0 19 * * *').split(' ')
       return `${String(hour ?? '19').padStart(2, '0')}:${String(minute ?? '0').padStart(2, '0')}`
@@ -27,14 +30,14 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
     const [modelLabel, setModelLabel] = useState('')
     const [tagFilter, setTagFilter] = useState('')
     const [busy, setBusy] = useState(false)
-    const targetOptions = featureTargetOptions(sessions, sessionId, settings?.defaultTargetSessionId ?? '')
+    const targetOptions = featureTargetOptions(sessions, sessionIds, settings?.defaultTargetSessionIds ?? [])
 
     const payload = (nextEnabled) => {
       const [hour, minute] = checkTime.split(':').map(Number)
       return {
         id: feature.id,
         enabled: nextEnabled ?? enabled,
-        target: { sessionId },
+        target: { sessionIds },
         source: { id: 'none', baseUrl: '' },
         scheduleMode: 'cron',
         cron: [`${minute} ${hour} * * *`],
@@ -44,7 +47,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
     }
 
     const persist = async (nextEnabled) => {
-      if (nextEnabled !== false && targetOptions.effectiveSessionId === '') throw new Error('请先设置全局默认目标或选择模组目标会话')
+      if (nextEnabled !== false && targetOptions.effectiveSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
       if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(checkTime)) throw new Error('每日检查时间无效')
       const next = await postJson(FEATURES_PATH, payload(nextEnabled))
@@ -70,13 +73,15 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
       try {
         await persist()
         const { result } = await postJson(FEATURES_RUN_PATH, { id: feature.id })
+        const targets = summarizeTargetResults(result, sessions)
+        const targetCount = targets.total > 1 ? `（${targets.succeeded}/${targets.total} 个目标已处理）` : ''
         onNotice(result?.error
-          ? { kind: 'error', text: `${feature.label} 发起失败：${result.error}` }
+          ? { kind: 'error', text: `${feature.label} ${result.sent > 0 ? '部分完成' : '发起失败'}${targetCount}：${targets.failureText || result.error}` }
           : result?.warning
             ? { kind: 'error', text: `${feature.label} ${result.warning}` }
           : result?.channel === 'qq-sdk'
-            ? { kind: 'ok', text: `${feature.label} 已调用上游 QQ Bot 发送话题` }
-            : { kind: 'ok', text: `${feature.label} 已提交服务回合，QQ 送达待确认` })
+            ? { kind: 'ok', text: `${feature.label} 已调用上游 QQ Bot 发送 ${result?.sent ?? 0} 条话题${targetCount}` }
+            : { kind: 'ok', text: `${feature.label} 已提交 ${result?.sent ?? 0} 个服务回合${targetCount}，QQ 送达待确认` })
         onRun()
       } catch (error) {
         onNotice({ kind: 'error', text: `${feature.label} 发起失败：${String(error?.message ?? error)}` })
@@ -154,11 +159,8 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
           ? '当前全局使用上游 QQ Bot 直接发送：选中的话题会作为开场白原文发出，不结合会话上下文生成。'
           : feature.description),
         h('div', { style: styles.grid },
-          field('目标会话', h('div', { style: { display: 'flex', gap: 6 } },
-            h('select', { style: { ...styles.select, flex: 1, minWidth: 0 }, value: sessionId, onChange: (event) => setSessionId(event.target.value), onFocus: () => { void onRefreshSessions?.() } },
-              h('option', { value: '' }, `使用全局默认（${targetOptions.defaultLabel}）`),
-              ...targetOptions.options.map((option) => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
-            h('button', { type: 'button', style: { ...styles.ghostButton, padding: '6px 9px', whiteSpace: 'nowrap' }, onClick: () => { void onRefreshSessions?.() } }, '刷新选项'))),
+          field('目标会话', h(TargetPicker, { sessions, selectedIds: sessionIds, onChange: setSessionIds, onRefreshSessions,
+            label: '目标会话', inheritLabel: targetOptions.defaultLabel })),
           field('每日检查时间', h('input', { style: styles.input, type: 'time', value: checkTime, onChange: (event) => setCheckTime(event.target.value) })),
           field('触发概率（%）', numberInput(chancePercent, setChancePercent, 0, 100)),
           field('发送冷却（小时）', numberInput(cooldownHours, setCooldownHours, 1, 720)),
@@ -196,7 +198,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
               topic.sourceKeyword ? h('span', { style: styles.desc }, `来源主题词：${topic.sourceKeyword}`) : null))),
         ),
         targetOptions.invalidSelected ? h('p', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
-        h('p', { style: styles.desc }, '会话设置在「配置」页；此处留空将使用全局默认目标。'),
+        h('p', { style: styles.desc }, '会话设置在「配置」页；此处不选择将继承整组全局默认目标。'),
         h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会按概率、冷却和安静时段判断；“立即发起”会跳过这些条件。`),
         h('p', { style: styles.desc },
           (cronRules(feature.cron)[0] ?? '') !== (() => { const [hour, minute] = checkTime.split(':').map(Number); return `${minute} ${hour} * * *` })()

@@ -42,3 +42,18 @@ test('模组留空时继承全局目标，并识别全局目标失效', () => {
   assert.equal(featureTargetOptions(sessions, '', 'session-gone').invalidSelected, true)
   assert.match(featureTargetOptions(sessions, 'session-shared', 'session-gone').defaultLabel, /已失效/)
 })
+
+test('多选同时展示群聊和私聊，保留失效目标供移除', () => {
+  const sessions = [
+    { sessionId: 'group-one', scope: 'group', title: '赛事群' },
+    { sessionId: 'private-two', scope: 'c2c', title: '私聊用户' },
+  ]
+  const result = sessionTargetOptions(sessions, ['group-one', 'private-two', 'missing'])
+  assert.deepEqual(result.options.map((item) => item.value), ['group-one', 'private-two', 'missing'])
+  assert.match(result.options[1].label, /私聊/)
+  assert.deepEqual(result.invalidIds, ['missing'])
+  assert.equal(result.options[2].disabled, true)
+  const inherited = featureTargetOptions(sessions, [], ['group-one', 'private-two'])
+  assert.deepEqual(inherited.effectiveSessionIds, ['group-one', 'private-two'])
+  assert.match(inherited.defaultLabel, /2 个目标/)
+})

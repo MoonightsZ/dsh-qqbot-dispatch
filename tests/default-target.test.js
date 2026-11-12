@@ -17,15 +17,15 @@ test('全局默认目标用于未覆盖的模组，已有独立目标保持不�
   }), 'utf8')
   const runtime = runtimeAt(path)
   const initial = await runtime.snapshot()
-  assert.equal(initial.settings.defaultTargetSessionId, '')
-  assert.equal(initial.features.find((item) => item.id === 'cs2-matches').target.sessionId, 'cs2-old')
+  assert.deepEqual(initial.settings.defaultTargetSessionIds, [])
+  assert.deepEqual(initial.features.find((item) => item.id === 'cs2-matches').target.sessionIds, ['cs2-old'])
 
-  runtime.saveSettings({ defaultTargetSessionId: 'shared-group' })
+  runtime.saveSettings({ defaultTargetSessionIds: ['shared-group'] })
   const restored = runtimeAt(path)
   const snapshot = await restored.snapshot()
-  assert.deepEqual(snapshot.settings, { deliveryMethod: 'service-turn', defaultTargetSessionId: 'shared-group' })
-  assert.equal(snapshot.features.find((item) => item.id === 'cs2-matches').target.sessionId, 'cs2-old')
-  assert.equal(snapshot.features.find((item) => item.id === 'casual-chat').target.sessionId, '')
+  assert.deepEqual(snapshot.settings, { deliveryMethod: 'service-turn', defaultTargetSessionIds: ['shared-group'] })
+  assert.deepEqual(snapshot.features.find((item) => item.id === 'cs2-matches').target.sessionIds, ['cs2-old'])
+  assert.deepEqual(snapshot.features.find((item) => item.id === 'casual-chat').target.sessionIds, [])
 
   const targets = []
   for (const id of ['cs2-matches', 'casual-chat']) {
@@ -39,10 +39,10 @@ test('全局默认目标用于未覆盖的模组，已有独立目标保持不�
 test('全局投递方式和默认目标可独立更新，清空后继承模组不发送', async () => {
   const path = join(mkdtempSync(join(tmpdir(), 'qqbot-default-target-')), 'state.json')
   const runtime = runtimeAt(path)
-  runtime.saveSettings({ defaultTargetSessionId: 'shared-group' })
+  runtime.saveSettings({ defaultTargetSessionIds: ['shared-group'] })
   runtime.saveSettings({ deliveryMethod: 'upstream-sdk' })
-  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'upstream-sdk', defaultTargetSessionId: 'shared-group' })
-  runtime.saveSettings({ defaultTargetSessionId: '' })
+  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'upstream-sdk', defaultTargetSessionIds: ['shared-group'] })
+  runtime.saveSettings({ defaultTargetSessionIds: [] })
   let called = false
   runtime.registerProvider('casual-chat', async () => { called = true; return { matched: 1, sent: 1 } })
   const result = await runtime.run('casual-chat', { manual: true })
@@ -54,10 +54,10 @@ test('全局投递方式和默认目标可独立更新，清空后继承模组�
 test('已启用模组依赖全局默认目标时禁止清空', async () => {
   const path = join(mkdtempSync(join(tmpdir(), 'qqbot-default-target-')), 'state.json')
   const runtime = runtimeAt(path)
-  runtime.saveSettings({ defaultTargetSessionId: 'shared-group' })
+  runtime.saveSettings({ defaultTargetSessionIds: ['shared-group'] })
   await runtime.save('casual-chat', { enabled: true, target: { sessionId: '' }, source: { id: 'none' }, values: {} })
-  assert.throws(() => runtime.saveSettings({ defaultTargetSessionId: '' }), /已启用的模组/)
-  assert.equal((await runtime.snapshot()).settings.defaultTargetSessionId, 'shared-group')
+  assert.throws(() => runtime.saveSettings({ defaultTargetSessionIds: [] }), /已启用的模组/)
+  assert.deepEqual((await runtime.snapshot()).settings.defaultTargetSessionIds, ['shared-group'])
 })
 
 test('没有全局默认目标时不能启用无独立目标的模组', async () => {
@@ -74,6 +74,6 @@ test('已移除模组的旧状态不妨碍清空默认目标', async () => {
     features: { 'removed-module': { enabled: true, target: { sessionId: '' } } },
   }), 'utf8')
   const runtime = runtimeAt(path)
-  runtime.saveSettings({ defaultTargetSessionId: '' })
-  assert.equal((await runtime.snapshot()).settings.defaultTargetSessionId, '')
+  runtime.saveSettings({ defaultTargetSessionIds: [] })
+  assert.deepEqual((await runtime.snapshot()).settings.defaultTargetSessionIds, [])
 })

@@ -41,6 +41,8 @@ const MIN_INTERVAL_MINUTES = 15
 const MAX_INTERVAL_MINUTES = 24 * 60
 const MAX_VALUE_LENGTH = 120
 const MAX_TEAMS = 50
+const MAX_TARGETS = 20
+const TARGET_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000
 
 /** Data-source choices, mirroring the provider rows of dsh's model settings. */
 export const SOURCES = [
@@ -75,7 +77,7 @@ function defaultValues(entry) {
 function defaultFeature(entry) {
   return {
     enabled: false,
-    target: { sessionId: '' },
+    target: { sessionIds: [] },
     source: entry.defaults?.source ?? { id: 'custom', baseUrl: '' },
     intervalMinutes: entry.defaults?.intervalMinutes ?? 60,
     scheduleMode: entry.defaults?.scheduleMode ?? (entry.id === 'cs2-matches' ? 'cron' : 'interval'),
@@ -99,9 +101,27 @@ function defaultFeature(entry) {
 function defaultState(entries) {
   return {
     version: 1,
-    settings: { deliveryMethod: 'service-turn', defaultTargetSessionId: '' },
+    settings: { deliveryMethod: 'service-turn', defaultTargetSessionIds: [] },
     features: Object.fromEntries(entries.map((entry) => [entry.id, defaultFeature(entry)])),
   }
+}
+
+function readSessionIds(value, legacy = '') {
+  const source = Array.isArray(value) ? value : typeof legacy === 'string' ? [legacy] : []
+  return [...new Set(source.filter((item) => typeof item === 'string').map((item) => item.trim())
+    .filter((item) => item !== '' && item.length <= MAX_VALUE_LENGTH))].slice(0, MAX_TARGETS)
+}
+
+function submittedSessionIds(value) {
+  if (!Array.isArray(value)) throw new Error('目标会话必须是数组')
+  if (value.length > MAX_TARGETS) throw new Error(`目标会话最多 ${MAX_TARGETS} 个`)
+  if (value.some((item) => typeof item !== 'string' || item.trim() === '' || item.trim().length > MAX_VALUE_LENGTH)) throw new Error('目标会话无效')
+  return [...new Set(value.map((item) => item.trim()))]
+}
+
+function featureTargetIds(feature, settings) {
+  const own = readSessionIds(feature?.target?.sessionIds, feature?.target?.sessionId)
+  return own.length > 0 ? own : readSessionIds(settings?.defaultTargetSessionIds, settings?.defaultTargetSessionId)
 }
 
 function readStateFile(entries, statePath) {
@@ -111,11 +131,20 @@ function readStateFile(entries, statePath) {
     const parsed = JSON.parse(readFileSync(statePath, 'utf8'))
     if (parsed === null || typeof parsed !== 'object' || parsed.features === null || typeof parsed.features !== 'object') return base
     base.settings.deliveryMethod = parsed.settings?.deliveryMethod === 'upstream-sdk' ? 'upstream-sdk' : 'service-turn'
-    base.settings.defaultTargetSessionId = typeof parsed.settings?.defaultTargetSessionId === 'string'
-      ? parsed.settings.defaultTargetSessionId.trim().slice(0, MAX_VALUE_LENGTH) : ''
+    base.settings.defaultTargetSessionIds = readSessionIds(parsed.settings?.defaultTargetSessionIds, parsed.settings?.defaultTargetSessionId)
     for (const [id, feature] of Object.entries(parsed.features)) {
       if (feature === null || typeof feature !== 'object') continue
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
+      base.features[id].target = { sessionIds: readSessionIds(feature.target?.sessionIds, feature.target?.sessionId) }
+      if ((id === 'cs2-matches' || id === 'casual-chat') && (!feature.targetStates || typeof feature.targetStates !== 'object')) {
+        const oldTargetId = String(feature.target?.sessionId ?? '').trim() || String(parsed.settings?.defaultTargetSessionId ?? '').trim()
+        base.features[id].targetStates = oldTargetId === '' ? {} : { [oldTargetId]: {
+          seen: feature.seen && typeof feature.seen === 'object' ? feature.seen : {},
+          lastSentAt: feature.lastSentAt ?? 0,
+          lastTopicId: feature.lastTopicId ?? '',
+          touchedAt: Date.now(),
+        } }
+      }
       if (id === 'cs2-matches') {
         if (!CS2_RULE_IDS.includes(feature.noticeMode)) base.features[id].noticeMode = 'daily-digest'
         base.features[id].noticeRules = migrateCs2NoticeRules(feature)
@@ -144,6 +173,12 @@ function readStateFile(entries, statePath) {
         values.topics = normalizeTopics(values.topics)
         base.features[id].values = values
       }
+      if (id === 'cs2-matches' || id === 'casual-chat') {
+        const active = new Set(featureTargetIds(base.features[id], base.settings))
+        base.features[id].targetStates = Object.fromEntries(Object.entries(base.features[id].targetStates ?? {})
+          .filter(([sessionId, item]) => item && typeof item === 'object' &&
+            (active.has(sessionId) || Date.now() - Number(item.touchedAt ?? 0) <= TARGET_STATE_RETENTION_MS)))
+      }
     }
     return base
   } catch {
@@ -166,7 +201,7 @@ function clamp(value, min, max) {
 export function configFromInput(entry, input) {
   const source = input !== null && typeof input === 'object' ? input : {}
   const target = source.target !== null && typeof source.target === 'object' ? source.target : {}
-  const sessionId = String(target.sessionId ?? '').trim().slice(0, MAX_VALUE_LENGTH)
+  const sessionIds = submittedSessionIds(target.sessionIds ?? readSessionIds(undefined, target.sessionId))
   const sourceInput = source.source !== null && typeof source.source === 'object' ? source.source : {}
   const sourceId = SOURCES.some((item) => item.id === sourceInput.id) ? sourceInput.id : 'none'
   const baseUrl = String(sourceInput.baseUrl ?? '').trim().slice(0, 300)
@@ -200,7 +235,7 @@ export function configFromInput(entry, input) {
     scheduleMode,
     cron,
     timeZone,
-    target: { sessionId },
+    target: { sessionIds },
     source: { id: sourceId, baseUrl },
     intervalMinutes,
     values,
@@ -235,7 +270,7 @@ function publicFeature(entry, feature, statePath, credential) {
     fields: entry.fields,
     extension: entry.extension === true,
     enabled: feature.enabled === true,
-    target: feature.target ?? { sessionId: '' },
+    target: { sessionIds: readSessionIds(feature.target?.sessionIds, feature.target?.sessionId) },
     intervalMinutes: feature.intervalMinutes ?? 60,
     scheduleMode: feature.scheduleMode === 'cron' ? 'cron' : 'interval',
     cron: cronRules(feature.cron),
@@ -318,19 +353,19 @@ export function createFeatureRuntime(options) {
 
   function saveSettings(input) {
     const hasDeliveryMethod = Object.hasOwn(input ?? {}, 'deliveryMethod')
-    const hasTarget = Object.hasOwn(input ?? {}, 'defaultTargetSessionId')
+    const hasTarget = Object.hasOwn(input ?? {}, 'defaultTargetSessionIds') || Object.hasOwn(input ?? {}, 'defaultTargetSessionId')
     if (!hasDeliveryMethod && !hasTarget) throw new Error('没有可保存的全局配置')
     if (hasDeliveryMethod && input.deliveryMethod !== 'service-turn' && input.deliveryMethod !== 'upstream-sdk') throw new Error('未知的通知投递方式')
-    if (hasTarget && (typeof input.defaultTargetSessionId !== 'string' || input.defaultTargetSessionId.trim().length > MAX_VALUE_LENGTH)) throw new Error('目标会话无效')
+    const submittedTargets = hasTarget ? submittedSessionIds(input.defaultTargetSessionIds ?? readSessionIds(undefined, input.defaultTargetSessionId)) : null
     const state = read()
-    if (hasTarget && input.defaultTargetSessionId.trim() === '' && entries.some((entry) => {
+    if (hasTarget && submittedTargets.length === 0 && entries.some((entry) => {
       const feature = state.features[entry.id]
-      return feature?.enabled === true && !String(feature.target?.sessionId ?? '').trim()
+      return feature?.enabled === true && readSessionIds(feature.target?.sessionIds, feature.target?.sessionId).length === 0
     })) {
       throw new Error('已启用的模组仍使用全局默认目标，请先指定独立目标或关闭模组')
     }
     if (hasDeliveryMethod) state.settings.deliveryMethod = input.deliveryMethod
-    if (hasTarget) state.settings.defaultTargetSessionId = input.defaultTargetSessionId.trim()
+    if (hasTarget) state.settings.defaultTargetSessionIds = submittedTargets
     writeStateFile(statePath, state)
     return state.settings
   }
@@ -346,7 +381,7 @@ export function createFeatureRuntime(options) {
       }
     }
     const state = read()
-    if (submitted.enabled && !submitted.target.sessionId && !state.settings.defaultTargetSessionId) throw new Error('请先设置全局默认目标或选择模组目标会话')
+    if (submitted.enabled && submitted.target.sessionIds.length === 0 && state.settings.defaultTargetSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
 
     const credentials = ctx.get('credentials')
     const ref = credentialRefFor(id)
@@ -387,7 +422,7 @@ export function createFeatureRuntime(options) {
     if (rules !== null && !Object.hasOwn(rules, mode)) throw new Error('通知规则无效')
     const rule = rules?.[mode]
     const checkedAt = now()
-    const result = { checkedAt, matched: 0, sent: 0, error: '', ...(mode === undefined ? {} : { noticeMode: mode }) }
+    const result = { checkedAt, matched: 0, sent: 0, error: '', targetResults: [], ...(mode === undefined ? {} : { noticeMode: mode }) }
     if ((!feature.enabled || (rule !== undefined && !rule.enabled)) && (!manual || entry.extension === true)) {
       return { skipped: true, reason: 'disabled' }
     }
@@ -410,14 +445,63 @@ export function createFeatureRuntime(options) {
     running.add(id)
     return Promise.resolve()
       .then(async () => {
-        const sessionId = String(feature.target?.sessionId ?? '').trim() || state.settings.defaultTargetSessionId
-        if (sessionId === '') throw new Error('未选择目标会话')
-        const outcome = await provider({ feature, settings: state.settings, target: { sessionId }, ctx, now, manual, forceResend: manual && forceResend, ...(mode === undefined ? {} : { noticeMode: mode }), ...(Number.isFinite(eligibleAt) ? { eligibleAt } : {}) })
-        result.matched = Number(outcome?.matched ?? 0)
-        result.sent = Number(outcome?.sent ?? 0)
-        if (typeof outcome?.error === 'string') result.error = outcome.error
-        if (typeof outcome?.channel === 'string') result.channel = outcome.channel
-        if (typeof outcome?.warning === 'string') result.warning = outcome.warning
+        const sessionIds = featureTargetIds(feature, state.settings)
+        if (sessionIds.length === 0) throw new Error('未选择目标会话')
+        for (const sessionId of sessionIds) {
+          const targetState = feature.targetStates?.[sessionId] ?? {}
+          const isolated = id === 'cs2-matches' || id === 'casual-chat'
+          const targetFeature = isolated ? {
+            ...feature,
+            seen: { ...(targetState.seen ?? {}) },
+            lastSentAt: targetState.lastSentAt ?? 0,
+            lastTopicId: targetState.lastTopicId ?? '',
+          } : feature
+          const item = { sessionId, matched: 0, sent: 0, error: '' }
+          try {
+            const outcome = await provider({ feature: targetFeature, settings: state.settings, target: { sessionId }, ctx, now, manual,
+              forceResend: manual && forceResend, ...(mode === undefined ? {} : { noticeMode: mode }), ...(Number.isFinite(eligibleAt) ? { eligibleAt } : {}) })
+            item.matched = Number(outcome?.matched ?? 0)
+            item.sent = Number(outcome?.sent ?? 0)
+            if (outcome?.skipped === true) item.skipped = true
+            if (typeof outcome?.error === 'string') item.error = outcome.error
+            if (typeof outcome?.channel === 'string') item.channel = outcome.channel
+            if (typeof outcome?.warning === 'string') item.warning = outcome.warning
+          } catch (error) {
+            item.error = String(error?.message ?? error)
+            item.matched = Number(error?.matched ?? 0)
+            item.sent = Number(error?.sent ?? 0)
+          } finally {
+            const latest = read()
+            const latestFeature = latest.features[id] ?? feature
+            if (isolated) {
+              latestFeature.targetStates ??= {}
+              latestFeature.targetStates[sessionId] = {
+                seen: targetFeature.seen,
+                lastSentAt: targetFeature.lastSentAt ?? 0,
+                lastTopicId: targetFeature.lastTopicId ?? '',
+                touchedAt: now(),
+              }
+              if (sessionIds.length === 1) {
+                latestFeature.seen = targetFeature.seen
+                latestFeature.lastSentAt = targetFeature.lastSentAt
+                latestFeature.lastTopicId = targetFeature.lastTopicId
+              }
+            } else {
+              latestFeature.seen = targetFeature.seen
+              latestFeature.lastSentAt = targetFeature.lastSentAt
+            }
+            latestFeature.tierCache = targetFeature.tierCache
+            latest.features[id] = latestFeature
+            writeStateFile(statePath, latest)
+          }
+          result.targetResults.push(item)
+          result.matched += item.matched
+          result.sent += item.sent
+          if (item.channel && !result.channel) result.channel = item.channel
+          if (item.warning) result.warning = [result.warning, item.warning].filter(Boolean).join('；')
+        }
+        const failed = result.targetResults.filter((item) => item.error)
+        if (failed.length > 0) result.error = failed.map((item) => `${item.sessionId.slice(-8)}：${item.error}`).join('；')
         return result
       })
       .catch((error) => {
@@ -426,8 +510,6 @@ export function createFeatureRuntime(options) {
       })
       .finally(() => {
         running.delete(id)
-        feature.lastRunAt = checkedAt
-        feature.lastResult = result
         const latest = read()
         const latestRules = id === 'cs2-matches' ? migrateCs2NoticeRules(latest.features[id] ?? feature) : null
         if (latestRules !== null) {
@@ -437,10 +519,6 @@ export function createFeatureRuntime(options) {
           ...(latest.features[id] ?? feature),
           lastRunAt: checkedAt,
           lastResult: result,
-          seen: feature.seen,
-          tierCache: feature.tierCache,
-          lastSentAt: feature.lastSentAt,
-          ...(id === 'casual-chat' ? { lastTopicId: feature.lastTopicId } : {}),
           ...(latestRules === null ? {} : { noticeRules: latestRules }),
         }
         writeStateFile(statePath, latest)
