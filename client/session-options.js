@@ -2,12 +2,17 @@ function asIds(value) {
   return Array.isArray(value) ? value.filter(Boolean) : value ? [value] : []
 }
 
+export function sessionDisplayName(session) {
+  if (session?.scope === 'c2c' && typeof session.peerId === 'string' && session.peerId !== '') return session.peerId
+  return session?.groupName || session?.title || '(无标题)'
+}
+
 export function sessionTargetOptions(sessions, selectedIds) {
   const selected = asIds(selectedIds)
   const available = sessions.filter((session) => session.groupStatus !== 'unavailable')
   const options = available.map((session) => ({
     value: session.sessionId,
-    label: `${session.groupName || session.title || '(无标题)'} · ${session.scope === 'group' ? '群聊' : '私聊'} · ${session.sessionId.slice(-8)}`,
+    label: `${sessionDisplayName(session)} · ${session.scope === 'group' ? '群聊' : '私聊'} · ${session.sessionId.slice(-8)}`,
     disabled: false,
   }))
   const invalidIds = selected.filter((id) => !available.some((session) => session.sessionId === id))

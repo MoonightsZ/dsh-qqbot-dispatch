@@ -166,6 +166,7 @@ test('同步群名優先使用上游當前的會話映射', async () => {
   const ctx = {
     inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
     get: (name) => name === 'sessionController' ? {
+      list: async () => [{ sessionId: 'session-new' }],
       projections: async () => ({ values: { title: '旧标题' } }),
       rename: async (value) => { renamed.push(value) },
     } : undefined,
@@ -185,6 +186,51 @@ test('同步群名優先使用上游當前的會話映射', async () => {
   assert.deepEqual(renamed, [{ sessionId: 'session-new', title: '新群名' }])
   assert.equal(body.entries[0].sessionId, 'session-new')
   assert.equal(learned.openid.sessionId, 'session-new')
+})
+
+test('批量同步群名只处理会话列表中未归档的群', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qqbot-dispatch-visible-titles-'))
+  const prefsPath = join(dir, 'model-prefs.json')
+  writeFileSync(prefsPath, JSON.stringify({ sessionIds: {
+    'qqbot:app:group:visible': 'session-visible',
+    'qqbot:app:c2c:private': 'session-private',
+    'qqbot:app:group:archived': 'session-archived',
+    'qqbot:app:group:missing': 'session-missing',
+  } }), 'utf8')
+  const handlers = new Map()
+  const queried = []
+  const ctx = {
+    inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
+    get: (name) => name === 'sessionController' ? {
+      list: async () => [
+        { sessionId: 'session-visible', title: '现有群' },
+        { sessionId: 'session-private', title: '私聊' },
+        { sessionId: 'session-archived', title: '旧群' },
+      ],
+      projections: async () => ({ values: { title: '现有群' } }),
+      rename: async () => {},
+    } : name === 'workspaceController' ? {
+      follow: async function * () { yield { type: 'baseline', value: { archivedSessionIds: ['session-archived'] } } },
+    } : undefined,
+  }
+  registerDispatchRoutes(ctx, {
+    resolver: createSessionResolver({ appId: 'app', prefsPath }),
+    groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} },
+    features: {}, defaultMode: 'queue',
+    qqbotApi: { readQqbotCredentials: async () => ({ appId: 'app' }), groupInfo: async (openid) => {
+      queried.push(openid)
+      if (openid !== 'visible') throw new Error('旧群不可达')
+      return { group_name: '现有群' }
+    } },
+    loadOptionalPatches: () => [],
+  })
+  const response = { writeHead: () => {}, end: (value) => { body = JSON.parse(value) } }
+  let body
+  await handlers.get('/qqbot-tool-dispatch/sessions')({ method: 'GET', headers: { host: 'localhost:3000' } }, response)
+  assert.deepEqual(body.sessions.map((session) => session.sessionId), ['session-visible', 'session-private'])
+  await handlers.get('/qqbot-tool-dispatch/titles/refresh')({ method: 'POST', headers: { host: 'localhost:3000' } }, response)
+  assert.deepEqual(queried, ['visible'])
+  assert.deepEqual([body.updated, body.skipped, body.failed], [0, 1, 0])
 })
 
 test('多個 QQ 會話的標題讀取可以並行', async () => {

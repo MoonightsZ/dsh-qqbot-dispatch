@@ -59,8 +59,41 @@ test('有會話資料時可繪製會話列表', () => {
   assert.equal(view.type, 'table')
   assert.equal(view.props.className, 'qqd-session-table')
   const cells = view.children[1].children[0][0].children
-  assert.deepEqual(cells.map((cell) => cell.props['data-label']), ['会话', '状态', '最后活动', '群信息'])
+  assert.deepEqual(cells.map((cell) => cell.props['data-label']), ['会话', '状态', '最后活动', '操作'])
   assert.match(JSON.stringify(view), /刷新群名/)
+})
+
+test('群聊和私聊都能从会话列表复制对应的 openid', () => {
+  const copied = []
+  const { SessionTable } = createSessionTables({ h, C, styles, ...common })
+  const view = SessionTable({
+    rows: [
+      { sessionId: 'session-group', scope: 'group', peerId: 'GROUP_OPENID', groupOpenid: 'GROUP_OPENID' },
+      { sessionId: 'session-private', scope: 'c2c', peerId: 'USER_OPENID' },
+    ],
+    rowBusy: '', onRefresh: () => {}, onCopy: (openid) => copied.push(openid),
+  })
+  const rows = view.children[1].children[0]
+  for (const row of rows) {
+    const actionCell = row.children[3]
+    const copy = actionCell.children[0].children.find((child) => child?.type === 'button' && child.children.includes('OpenID'))
+    assert.ok(copy)
+    assert.match(copy.props['aria-label'], /复制.*OpenID/)
+    copy.props.onClick()
+  }
+  assert.deepEqual(copied, ['GROUP_OPENID', 'USER_OPENID'])
+})
+
+test('私聊会话显示用户 openid 而非 DSH 会话标题', () => {
+  const { SessionTable } = createSessionTables({ h, C, styles, ...common })
+  const view = SessionTable({
+    rows: [{ sessionId: 'session-private', title: '旧标题', scope: 'c2c', peerId: 'USER_OPENID_ABC', hasSession: false }],
+    rowBusy: '', onRefresh: () => {},
+  })
+  const rendered = JSON.stringify(view)
+  assert.match(rendered, /USER_OPENID_ABC/)
+  assert.doesNotMatch(rendered, /旧标题/)
+  assert.match(rendered, /私聊/)
 })
 
 test('群不可用的会话仍可见并提示重新同步', () => {

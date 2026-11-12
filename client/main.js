@@ -11,7 +11,6 @@ import { createGlobalTargetSettings } from './global-target-settings.js'
 const h = React.createElement
 const { useCallback, useEffect, useRef, useState } = React
 const SESSIONS_PATH = '/qqbot-tool-dispatch/sessions'
-const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
 const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
 const FEATURES_PATH = '/qqbot-tool-dispatch/features'
 const SETTINGS_PATH = '/qqbot-tool-dispatch/settings'
@@ -34,7 +33,6 @@ function DispatchSessionsPage() {
   const [notice, setNotice] = useState(null)
   const [tab, setTab] = useState('sessions')
   const [selectedFeatureId, setSelectedFeatureId] = useState(null)
-  const [refreshing, setRefreshing] = useState(false)
   const [sessionLoading, setSessionLoading] = useState(false)
   const [rowBusy, setRowBusy] = useState('')
   const [settingsBusy, setSettingsBusy] = useState(false)
@@ -84,31 +82,6 @@ function DispatchSessionsPage() {
   }
 
   /**
-   * 刷新：先让宿主去 QQ 平台取每个群的群名并改会话标题，再重读列表。
-   * 标题没变的群不会重复写，失败只影响那一个群。
-   */
-  const refreshTitles = useCallback(async () => {
-    setRefreshing(true)
-    try {
-      const body = await postJson(TITLES_PATH, {})
-      await refreshSessions()
-      const updated = body?.updated ?? 0
-      const skipped = body?.skipped ?? 0
-      const failed = body?.failed ?? 0
-      setNotice({
-        kind: failed > 0 ? 'error' : 'ok',
-        text: failed > 0
-          ? `群名刷新完成：更新 ${updated} 个，未变 ${skipped} 个，失败 ${failed} 个`
-          : `群名已同步：更新 ${updated} 个，未变 ${skipped} 个`,
-      })
-    } catch (failure) {
-      setNotice({ kind: 'error', text: `刷新群名失败：${String(failure?.message ?? failure)}` })
-    } finally {
-      setRefreshing(false)
-    }
-  }, [refreshSessions])
-
-  /**
    * 单行「刷新群名」：走的就是让某一行显示成「群名 · 11 人」的那条路——
    * GET /group-info?openid=…&fresh=1&sessionId=…，宿主顺手把群名写进会话标题。
    */
@@ -128,6 +101,16 @@ function DispatchSessionsPage() {
       setRowBusy('')
     }
   }, [refreshSessions])
+
+  const copyOpenid = useCallback(async (openid) => {
+    try {
+      if (!openid || !globalThis.navigator?.clipboard?.writeText) throw new Error('当前页面不支持剪贴板写入')
+      await globalThis.navigator.clipboard.writeText(openid)
+      setNotice({ kind: 'ok', text: 'OpenID 已复制' })
+    } catch (failure) {
+      setNotice({ kind: 'error', text: `复制 OpenID 失败：${String(failure?.message ?? failure)}` })
+    }
+  }, [])
 
   useEffect(() => {
     load()
@@ -215,16 +198,7 @@ function DispatchSessionsPage() {
           disabled: sessionLoading,
           title: '重新读取本地 QQ 会话列表',
           onClick: () => { void refreshSessions(true) },
-        }, sessionLoading ? '读取中…' : '刷新会话'), h('button', {
-          type: 'button',
-          className: 'qqd-ghost',
-          style: { ...styles.ghostButton, ...(refreshing ? styles.disabledButton : {}) },
-          disabled: refreshing,
-          title: '向 QQ 平台取每个群的群名，并把它写成会话标题',
-          onClick: () => {
-            void refreshTitles()
-          },
-        }, refreshing ? '同步中…' : '同步群名')),
+        }, sessionLoading ? '读取中…' : '刷新会话')),
       ),
 
       notice === null ? null : h('div', {
@@ -271,6 +245,7 @@ function DispatchSessionsPage() {
               rows: sessions,
               rowBusy,
               onRefresh: refreshRow,
+              onCopy: copyOpenid,
             })),
         ),
       ),

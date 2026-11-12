@@ -5,11 +5,11 @@ import { featureTargetOptions, sessionTargetOptions } from '../client/session-op
 test('目标选项优先展示群名并标明会话类型', () => {
   const result = sessionTargetOptions([
     { sessionId: 'session-123456789', title: '旧标题', groupName: '赛事群', scope: 'group' },
-    { sessionId: 'session-987654321', title: '私聊标题', scope: 'c2c' },
+    { sessionId: 'session-987654321', title: '私聊标题', scope: 'c2c', peerId: 'USER_OPENID_ABC' },
   ], 'session-123456789')
   assert.deepEqual(result.options, [
     { value: 'session-123456789', label: '赛事群 · 群聊 · 23456789', disabled: false },
-    { value: 'session-987654321', label: '私聊标题 · 私聊 · 87654321', disabled: false },
+    { value: 'session-987654321', label: 'USER_OPENID_ABC · 私聊 · 87654321', disabled: false },
   ])
   assert.equal(result.invalidSelected, false)
 })

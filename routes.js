@@ -173,8 +173,9 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
         throw new Error('没有找到 QQ Bot 凭据：profile 的 im-qqbot 行里没有 appId/appSecret')
       }
       const controller = ctx.get('sessionController')
+      if (typeof controller?.list !== 'function') throw new Error('会话列表不可用，无法同步群名')
       const learned = readGroupNames()
-      const targets = knownPeers()
+      const targets = (await listQqbotSessions(await archivedSessionIds(), knownPeers()))
         .filter((peer) => peer.scope === 'group')
         .map((peer) => ({ openid: peer.peerId, sessionId: peer.sessionId }))
       const entries = []
