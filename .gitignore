@@ -1,4 +1,13 @@
 node_modules/
+package-lock.json
+.env
+.env.*
+!.env.example
+.dsh-qqbot/
+docs/superpowers/
 *.log
+*.tgz
 .DS_Store
+Thumbs.db
+Desktop.ini
 *.tar.gz
