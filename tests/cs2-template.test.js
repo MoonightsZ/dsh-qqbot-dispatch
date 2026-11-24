@@ -4,7 +4,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFeatureRuntime } from '../features.js'
-import { DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE } from '../modules/cs2-matches/template.js'
+import { DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE, composeCs2ServiceTurnPrompt } from '../modules/cs2-matches/template.js'
+
+test('服務回合模板把已確認等級標為 Valve Tier', () => {
+  const section = { title: 'PGL Major', tier: 'Major', matchupsMarkdown: '- A vs B', sourceUrl: 'https://liquipedia.net/counterstrike/PGL' }
+  const prompt = composeCs2ServiceTurnPrompt(section, DEFAULT_CS2_PRE_MATCH_TEMPLATE, undefined, 'pre-match')
+  assert.match(prompt, /Valve Tier：Major/)
+  assert.doesNotMatch(prompt, /Major 级赛事|Major 級賽事/)
+})
 
 function runtimeAt(path) {
   return createFeatureRuntime({ ctx: { get: () => undefined }, statePath: path })

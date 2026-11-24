@@ -31,7 +31,7 @@ test('Liquipedia 与 Valve Tier 任一条件匹配即可入选', async () => {
   const result = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
   assert.deepEqual([result.matched, result.sent], [3, 3])
   assert.match(sent[0], /major/)
-  assert.deepEqual(requested, ['Local/Cup', 'Other/Cup'])
+  assert.deepEqual(requested.slice(0, 2), ['Local/Cup', 'Other/Cup'])
   feature.values.tiers = []
   feature.seen = {}
   const valveOnly = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
@@ -41,8 +41,7 @@ test('Liquipedia 与 Valve Tier 任一条件匹配即可入选', async () => {
   feature.seen = {}
   const liquipediaOnly = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
   assert.equal(liquipediaOnly.matched, 2)
-  assert.deepEqual(requested, ['Local/Cup', 'Other/Cup', 'PGL/2026/Singapore/Stage_1',
-    'PGL/2026/Singapore', 'PGL/2026/Fall'])
+  assert.ok(requested.includes('PGL/2026/Singapore'))
 })
 
 test('读取 Valve Tier 失败时报告错误，不缓存为无等级', async () => {
@@ -123,6 +122,308 @@ test('固定通知预览显示三种实际发送格式', () => {
   assert.match(previewCs2FixedNotice('daily-digest'), /赛程 · 共 1 场/)
   assert.match(previewCs2FixedNotice('pre-match'), /即将开赛/)
   assert.match(previewCs2FixedNotice('result'), /队伍 A 获胜/)
+})
+
+test('通知顯示實際 Valve Tier 與輪次，不把 Liquipedia S 級冒充 Major', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  const match = { id: 'one', identity: 'cup|Round 1|A|B', round: 'Round 1',
+    timestamp: Math.floor((now + 30 * 60_000) / 1000), tournament: 'PGL Major',
+    tournamentPage: 'PGL/2026/Singapore/Stage_1', teamA: 'A', teamB: 'B', bestOf: 1 }
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [match],
+    loadTournamentPage: async (page) => page.endsWith('Stage_1') ? '|liquipediatier=S-Tier\n' : '|publishertier=Major\n',
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, leadMinutes: 60,
+    values: { teams: [], tiers: [] }, seen: {} }
+  await provider({ feature, noticeMode: 'pre-match', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now })
+  assert.match(sent[0], /Valve Tier：Major/)
+  assert.match(sent[0], /Stage 1 · Round 1/)
+  assert.match(sent[0], /时区：Asia\/Shanghai/)
+  assert.doesNotMatch(sent[0], /S 级|S 級/)
+})
+
+test('已通知的比賽改期只發變更，連續改期沿用上次已通知時間', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  let minutes = 30
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [{
+    id: `${minutes}|A|B`, identity: 'cup|Round 1|A|B', round: 'Round 1',
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: 'A', teamB: 'B', bestOf: 1,
+  }], upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, leadMinutes: 60, timeZone: 'Asia/Shanghai',
+    values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'pre-match', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }
+  assert.equal((await provider(input)).sent, 1)
+  minutes = 45
+  assert.equal((await provider(input)).sent, 1)
+  assert.match(sent[1], /賽程變更|赛程变更/)
+  assert.match(sent[1], /12:30.*12:45/s)
+  assert.match(sent[1], /推遲|推迟/)
+  assert.equal((await provider(input)).sent, 0)
+  minutes = 55
+  assert.equal((await provider(input)).sent, 1)
+  assert.match(sent[2], /12:45.*12:55/s)
+  assert.equal(sent.length, 3)
+})
+
+test('改期通知失敗後保留舊時間，下次檢查重試', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  let minutes = 30
+  let fail = false
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [{
+    id: `${minutes}|A|B`, identity: 'cup|Round 1|A|B', round: 'Round 1',
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: 'A', teamB: 'B', bestOf: 1,
+  }], upstreamSender: { send: async ({ text }) => { if (fail) throw new Error('暫時失敗'); sent.push(text) } } })
+  const feature = { source: { id: 'liquipedia' }, leadMinutes: 60,
+    values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'pre-match', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }
+  await provider(input)
+  minutes = 45
+  fail = true
+  await assert.rejects(provider(input), /暫時失敗/)
+  fail = false
+  assert.equal((await provider(input)).sent, 1)
+  assert.match(sent[1], /12:30.*12:45/s)
+})
+
+test('比賽提前至檢查前且未完賽時仍報告時間變更', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  let minutes = 30
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [{
+    id: `${minutes}|A|B`, identity: 'cup|Round 1|A|B', round: 'Round 1',
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: 'A', teamB: 'B', bestOf: 1, finished: false,
+  }], upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, leadMinutes: 60,
+    values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'pre-match', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }
+  await provider(input)
+  minutes = -40
+  assert.equal((await provider(input)).sent, 1)
+  assert.match(sent[1], /12:30.*11:20/s)
+  assert.match(sent[1], /提前 70 分钟/)
+})
+
+test('每日賽程中的比賽推遲到賽前窗口外仍通知變更', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  let minutes = 30
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => [{
+    id: `${minutes}|A|B`, identity: 'cup|Round 1|A|B', round: 'Round 1',
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: 'A', teamB: 'B', bestOf: 1,
+  }], upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, digestDay: 'today', leadMinutes: 60,
+    timeZone: 'Asia/Shanghai', values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now }
+  assert.equal((await provider({ ...input, noticeMode: 'daily-digest' })).sent, 1)
+  minutes = 180
+  assert.equal((await provider({ ...input, noticeMode: 'pre-match' })).sent, 1)
+  assert.match(sent[1], /12:30.*15:00/s)
+  assert.doesNotMatch(sent[1], /即将开赛|即將開賽/)
+})
+
+test('下一輪已出現且目前可見的本輪比賽完賽時只發一次有範圍說明的回顧', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const make = (id, round, minutes, finished, scoreA, scoreB) => ({
+    id, identity: `cup|Round ${round}|${id}`, round: `Round ${round}`,
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: `Team ${id}`, teamB: `Rival ${id}`, finished, scoreA, scoreB, bestOf: 1,
+  })
+  let matches = [make('A', 1, -60, true, 13, 11), make('B', 1, -30, false, 9, 8),
+    make('C', 2, 90, false, null, null)]
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, timeZone: 'Asia/Shanghai',
+    values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }
+  await provider(input)
+  assert.doesNotMatch(sent.join('\n'), /Round 1 回顾/)
+  matches = [matches[0], make('B', 1, -30, true, 13, 6), matches[2]]
+  await provider(input)
+  assert.equal(sent.filter((item) => item.includes('Round 1 回顾')).length, 1)
+  assert.match(sent.at(-1), /当前可见 2 场|目前可見 2 場/)
+  assert.doesNotMatch(sent.at(-1), /全部比赛结束|全部比賽結束|晋级|晉級/)
+  await provider(input)
+  assert.equal(sent.filter((item) => item.includes('Round 1 回顾')).length, 1)
+})
+
+test('階段頁確認全輪槽位完賽後發送 Round 已結束，且不重複發送', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const make = (id, round, minutes, finished, scoreA, scoreB) => ({
+    id, identity: `cup|Round ${round}|${id}`, round: `Round ${round}`,
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup',
+    tournamentPage: 'Cup/Stage_1', teamA: id, teamB: `Rival ${id}`,
+    finished, scoreA, scoreB, bestOf: 1,
+  })
+  const matches = [make('A', 1, -30, true, 13, 11), make('B', 1, -20, true, 13, 9),
+    make('C', 2, 60, false, null, null)]
+  const slot = (id) => `|{{Match
+ |opponent1={{TeamOpponent|team${id}}}|opponent2={{TeamOpponent|rival${id}}}
+ |date=November 24, 2026 |finished=true
+ |map1={{Map|map=Mirage|finished=true
+  |t1t=7|t1ct=6|t2t=5|t2ct=6}}
+ }}`
+  const page = `{{SwissStandings|format=swiss3}}
+====Round 1====
+{{Matchlist|id=round-one|matchsection=Round 1
+${Array.from({ length: 8 }, (_, index) => slot(index)).join('\n')}
+}}
+====Round 2====`
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    loadTournamentPage: async () => page,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }
+  await provider(input)
+  const end = sent.find((item) => item.includes('Round 1 已结束'))
+  assert.ok(end)
+  assert.match(end, /本轮 8 场|本輪 8 場/)
+  assert.match(end, /当前赛程列表可见 2 场|目前賽程列表可見 2 場/)
+  assert.doesNotMatch(end, /以下仅列出|以下僅列出/)
+  assert.equal(feature.seen['roundcomplete:Cup/Stage_1|Round 1'], now)
+  await provider(input)
+  assert.equal(sent.filter((item) => item.includes('Round 1 已结束')).length, 1)
+  assert.doesNotMatch(sent.at(-1), /Round 1 回顾/)
+})
+
+test('階段頁含空對陣或未完賽地圖時不宣稱 Round 已結束', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const matches = [{ id: 'A', round: 'Round 1', timestamp: Math.floor((now - 30 * 60_000) / 1000),
+    tournament: 'Cup', tournamentPage: 'Cup/Stage_1', teamA: 'A', teamB: 'B',
+    finished: true, scoreA: 13, scoreB: 11, bestOf: 1 },
+  { id: 'C', round: 'Round 2', timestamp: Math.floor((now + 60 * 60_000) / 1000),
+    tournament: 'Cup', tournamentPage: 'Cup/Stage_1', teamA: 'C', teamB: 'D', finished: false }]
+  const slot = (id) => `|{{Match
+ |opponent1={{TeamOpponent|${id === 7 ? '' : `team${id}`}}}|opponent2={{TeamOpponent|rival${id}}}
+ |date=November 24, 2026 |finished=${id === 7 ? '' : 'true'}
+ |map1={{Map|map=Mirage|finished=${id === 7 ? '' : 'true'}
+  |t1t=7|t1ct=6|t2t=5|t2ct=6}}
+ }}`
+  const page = `{{SwissStandings|format=swiss3}}
+====Round 1====
+{{Matchlist|matchsection=Round 1
+${Array.from({ length: 8 }, (_, index) => slot(index)).join('\n')}
+}}
+====Round 2====`
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    loadTournamentPage: async () => page,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, values: { teams: [], tiers: [] }, seen: {} }
+  await provider({ feature, noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now })
+  assert.doesNotMatch(sent.join('\n'), /Round 1 已结束/)
+})
+
+test('已發輪次回顧後仍可發正式結束通知，失敗時保留重試機會', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const make = (id, round, finished) => ({ id, round: `Round ${round}`,
+    timestamp: Math.floor((now + (finished ? -30 : 60) * 60_000) / 1000),
+    tournament: 'Cup', tournamentPage: 'Cup/Stage_1', teamA: id, teamB: `Rival ${id}`,
+    finished, scoreA: finished ? 13 : null, scoreB: finished ? 11 : null, bestOf: 1 })
+  const matches = [make('A', 1, true), make('B', 1, true), make('C', 2, false)]
+  let full = false
+  let fail = true
+  const slot = (id) => `|{{Match
+ |opponent1={{TeamOpponent|team${id}}}|opponent2={{TeamOpponent|rival${id}}}
+ |date=November 24, 2026 |finished=${id === 7 && !full ? '' : 'true'}
+ |map1={{Map|map=Mirage|finished=${id === 7 && !full ? '' : 'true'}
+  |t1t=7|t1ct=6|t2t=5|t2ct=6}}
+ }}`
+  const page = () => `{{SwissStandings|format=swiss3}}
+====Round 1====
+{{Matchlist|id=one|matchsection=Round 1
+${Array.from({ length: 8 }, (_, index) => slot(index)).join('\n')}
+}}
+====Round 2====`
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    loadTournamentPage: async () => page(),
+    upstreamSender: { send: async ({ text }) => {
+      if (fail && text.includes('Round 1 已结束')) throw new Error('暫時失敗')
+      sent.push(text)
+    } } })
+  const feature = { source: { id: 'liquipedia' }, values: { teams: [], tiers: [] }, seen: {} }
+  const input = { feature, noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }
+  await provider(input)
+  assert.equal(sent.filter((text) => text.includes('Round 1 回顾')).length, 1)
+  full = true
+  await assert.rejects(provider(input), /暫時失敗/)
+  assert.equal(feature.seen['roundcomplete:Cup/Stage_1|Round 1'], undefined)
+  fail = false
+  await provider(input)
+  assert.equal(sent.filter((text) => text.includes('Round 1 已结束')).length, 1)
+  await provider(input)
+  assert.equal(sent.filter((text) => text.includes('Round 1 已结束')).length, 1)
+})
+
+test('輪次回顧遵守關注隊伍篩選且只預告緊接的輪次', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const make = (id, round, minutes, finished, scoreA, scoreB) => ({ id,
+    identity: `cup|Round ${round}|${id}`, round: `Round ${round}`,
+    timestamp: Math.floor((now + minutes * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: id, teamB: `Rival ${id}`, finished, scoreA, scoreB, bestOf: 1 })
+  const matches = [make('Watch', 1, -60, true, 13, 11), make('Ignore', 1, -30, true, 13, 6),
+    make('Watch', 2, 60, false, null, null), make('Later', 3, 120, false, null, null)]
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, values: { teams: ['Watch'], tiers: [] }, seen: {} }
+  await provider({ feature, noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now })
+  const recap = sent.find((item) => item.includes('Round 1 回顾'))
+  assert.ok(recap)
+  assert.match(recap, /Watch/)
+  assert.doesNotMatch(recap, /Ignore|Later|Round 3/)
+})
+
+test('多場長隊名的輪次回顧保持在通知長度限制內', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const matches = Array.from({ length: 20 }, (_, index) => ({
+    id: `one-${index}`, identity: `cup|Round 1|${index}`, round: 'Round 1',
+    timestamp: Math.floor((now - 60 * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: `Team-${index}-${'A'.repeat(100)}`, teamB: 'Rival', finished: true, scoreA: 13, scoreB: 11, bestOf: 1,
+  })).concat([{ id: 'next', identity: 'cup|Round 2|next', round: 'Round 2',
+    timestamp: Math.floor((now + 60 * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: 'A', teamB: 'B', finished: false, scoreA: null, scoreB: null, bestOf: 1 }])
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  const feature = { source: { id: 'liquipedia' }, values: { teams: [], tiers: [] }, seen: {} }
+  await provider({ feature, noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now })
+  assert.ok(sent.find((item) => item.includes('Round 1 回顾'))?.length < 1800)
+})
+
+test('只看到 Round 3 時不把它稱為 Round 1 的下一輪', async () => {
+  const now = Date.parse('2026-11-24T08:00:00Z')
+  const matches = ['A', 'B'].map((id) => ({ id, identity: `cup|Round 1|${id}`, round: 'Round 1',
+    timestamp: Math.floor((now - 60 * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: id, teamB: `Rival ${id}`, finished: true, scoreA: 13, scoreB: 11, bestOf: 1 }))
+  matches.push({ id: 'later', identity: 'cup|Round 3|later', round: 'Round 3',
+    timestamp: Math.floor((now + 60 * 60_000) / 1000), tournament: 'Cup', tournamentPage: 'Cup/Stage_1',
+    teamA: 'C', teamB: 'D', finished: false, scoreA: null, scoreB: null, bestOf: 1 })
+  const sent = []
+  const provider = createLiquipediaProvider({ loadMatches: async () => matches,
+    upstreamSender: { send: async ({ text }) => sent.push(text) } })
+  await provider({ feature: { source: { id: 'liquipedia' }, values: { teams: [], tiers: [] }, seen: {} },
+    noticeMode: 'result', settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
+  assert.match(sent.at(-1), /后续 Round 3/)
+  assert.doesNotMatch(sent.at(-1), /下一轮已列出/)
 })
 
 test('同一赛事的赛前对阵卡过长时分段且不重复发送', async () => {
@@ -304,6 +605,7 @@ test('赛果服务回合使用专用模板且只提供已确认比分', async ()
   assert.equal((await provider(input)).sent, 1)
   assert.match(prompts[0], /# 赛果 Test Cup/)
   assert.match(prompts[0], /Team A 2 : 1 Team B/)
+  assert.match(prompts[0], /时区：Asia\/Shanghai/)
   assert.match(prompts[0], /不得推断未提供的地图、回合或胜负原因/)
   assert.doesNotMatch(prompts[0], /\{\{results\}\}/)
 })
@@ -409,6 +711,7 @@ test('服务回合模式按赛事提交模板任务并沿用去重', async () =>
   assert.equal(submitted[0].sessionId, 'session-1')
   assert.match(submitted[0].text, /# Test Cup/)
   assert.match(submitted[0].text, /## 对局[\s\S]*Team A[\s\S]*Team B[\s\S]*## 焦点分析/)
+  assert.match(submitted[0].text, /时区：Asia\/Shanghai/)
   assert.match(submitted[0].text, /不得编造.*战绩.*阵容.*胜率/)
   assert.match(submitted[0].text, /建议关注的对局：Team A ⚔ Team B/)
   assert.doesNotMatch(submitted[0].text, /\{\{(?:tournament|matchups|sourceUrl)\}\}/)

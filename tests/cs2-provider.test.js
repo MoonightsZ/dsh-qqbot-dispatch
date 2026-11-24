@@ -34,11 +34,20 @@ test('解析新版赛事卡的赛程、队伍、赛事与 Bo 信息', () => {
   const matches = parseMatches(tickerCard({ timestamp: 1795492800 }))
   assert.deepEqual(matches, [{
     id: '1795492800|HEROIC|Imperial_Esports', timestamp: 1795492800,
+    identity: 'PGL/2026/Singapore/Stage_1|Round 1|HEROIC|Imperial_Esports', round: 'Round 1',
     teamA: 'HEROIC', teamB: 'Imperial Esports', pageA: 'HEROIC', pageB: 'Imperial_Esports',
     tournament: 'PGL Major Singapore 2026', tournamentPage: 'PGL/2026/Singapore/Stage_1',
     logoA: 'https://liquipedia.net/commons/HEROIC.png', logoB: 'https://liquipedia.net/commons/Imperial_Esports.png',
     bestOf: 1, finished: false, scoreA: null, scoreB: null,
   }])
+})
+
+test('同一輪的對局改時間後保持相同識別鍵', () => {
+  const first = parseMatches(tickerCard({ timestamp: 1795492800 }))[0]
+  const changed = parseMatches(tickerCard({ timestamp: 1795493700 }))[0]
+  assert.ok(first.identity)
+  assert.equal(first.identity, changed.identity)
+  assert.notEqual(first.id, changed.id)
 })
 
 test('新版赛事卡仅将已完赛的数字比分识别为赛果', () => {

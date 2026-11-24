@@ -98,7 +98,7 @@ export function composeCs2ServiceTurnPrompt(section, template, focus, mode = 'da
   const markdown = selectedTemplate
     .replaceAll('{{title}}', section.title)
     .replaceAll('{{tournament}}', section.title)
-    .replaceAll('{{tier}}', section.tier === undefined || section.tier === 'M' ? '' : `🏆 ${section.tier} 级赛事`)
+    .replaceAll('{{tier}}', `Valve Tier：${section.tier && section.tier !== 'M' ? section.tier : '未確認'}`)
     .replaceAll('{{schedule}}', section.scheduleMarkdown ?? section.matchupsMarkdown)
     .replaceAll('{{matchups}}', section.matchupsMarkdown)
     .replaceAll('{{results}}', section.resultsMarkdown ?? '')
