@@ -170,7 +170,7 @@ async function tournamentTiers(feature, page, readPage, needValve) {
   if (page === '') return { liquipedia: 'M', valve: '' }
   const cached = feature.tierCache?.[page]
   if (typeof cached === 'string' && !needValve) return { liquipedia: cached, valve: '' }
-  if (cached && typeof cached === 'object' && (!needValve || cached.valve !== undefined)) return cached
+  if (cached && typeof cached === 'object' && (!needValve || cached.valveResolved === true || cached.valve)) return cached
   let content = ''
   try {
     content = await readPage(page)
@@ -185,7 +185,7 @@ async function tournamentTiers(feature, page, readPage, needValve) {
     valve = (await tournamentTiers(feature, page.slice(0, page.lastIndexOf('/')), readPage, true)).valve
   }
   if (feature.tierCache === undefined) feature.tierCache = {}
-  const tiers = { liquipedia, valve }
+  const tiers = { liquipedia, valve, valveResolved: needValve || valve !== '' }
   feature.tierCache[page] = tiers
   return tiers
 }
@@ -451,13 +451,18 @@ export function createLiquipediaProvider(options = {}) {
     let selected = candidates
     if (wantedTiers.length > 0 || wantedValveTiers.length > 0) {
       for (const page of new Set(candidates.map((match) => match.tournamentPage))) {
-        const classification = await tournamentTiers(feature, page, readTournamentPage, wantedValveTiers.length > 0)
-        tiers.set(page, classification.liquipedia)
-        valveTiers.set(page, classification.valve)
+        if (wantedTiers.length > 0) {
+          const classification = await tournamentTiers(feature, page, readTournamentPage, false)
+          tiers.set(page, classification.liquipedia)
+        }
+        if (wantedValveTiers.length > 0 && !wantedTiers.includes(tiers.get(page))) {
+          const classification = await tournamentTiers(feature, page, readTournamentPage, true)
+          valveTiers.set(page, classification.valve)
+        }
       }
       selected = candidates.filter((match) =>
-        (wantedTiers.length === 0 || wantedTiers.includes(tiers.get(match.tournamentPage) ?? 'M')) &&
-        (wantedValveTiers.length === 0 || wantedValveTiers.includes(valveTiers.get(match.tournamentPage) ?? '')))
+        wantedTiers.includes(tiers.get(match.tournamentPage) ?? 'M') ||
+        wantedValveTiers.includes(valveTiers.get(match.tournamentPage) ?? ''))
     }
 
     pruneSeen(feature, checkedAt)

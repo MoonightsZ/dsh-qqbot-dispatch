@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { createLiquipediaProvider, previewCs2FixedNotice } from '../modules/cs2-matches/provider.js'
 import { createFeatureRuntime } from '../features.js'
 
-test('Liquipedia 与 Valve Tier 分别筛选，同一赛事需同时匹配', async () => {
+test('Liquipedia 与 Valve Tier 任一条件匹配即可入选', async () => {
   const now = Date.parse('2026-11-24T04:00:00Z')
   const match = (id, page) => ({ id, tournament: id, tournamentPage: page,
     timestamp: Math.floor((now + 60_000) / 1000), teamA: 'A', teamB: 'B', pageA: 'A', pageB: 'B', bestOf: 1 })
@@ -15,21 +15,23 @@ test('Liquipedia 与 Valve Tier 分别筛选，同一赛事需同时匹配', asy
     'PGL/2026/Singapore': '|liquipediatier=S-Tier\n|publishertier=Major\n',
     'PGL/2026/Fall': '|liquipediatier=S-Tier\n|publishertier=Tier 1\n',
     'Local/Cup': '|liquipediatier=B-Tier\n|publishertier=Major\n',
+    'Other/Cup': '|liquipediatier=B-Tier\n|publishertier=Tier 2\n',
   }
   const requested = []
   const sent = []
   const provider = createLiquipediaProvider({
-    loadMatches: async () => [match('major', 'PGL/2026/Singapore/Stage_1'), match('tier1', 'PGL/2026/Fall'), match('b-major', 'Local/Cup')],
+    loadMatches: async () => [match('major', 'PGL/2026/Singapore/Stage_1'), match('tier1', 'PGL/2026/Fall'),
+      match('b-major', 'Local/Cup'), match('b-tier2', 'Other/Cup')],
     loadTournamentPage: async (page) => { requested.push(page); return pages[page] ?? '' },
     upstreamSender: { send: async ({ text }) => sent.push(text) },
   })
   const feature = { source: { id: 'liquipedia' }, noticeMode: 'pre-match', leadMinutes: 60,
     values: { teams: [], tiers: ['S'], valveTiers: ['Major'] }, seen: {},
-    tierCache: { 'PGL/2026/Singapore/Stage_1': 'S', 'PGL/2026/Fall': 'S', 'Local/Cup': 'B' } }
+    tierCache: { 'PGL/2026/Singapore/Stage_1': 'S', 'PGL/2026/Fall': 'S', 'Local/Cup': 'B', 'Other/Cup': 'B' } }
   const result = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
-  assert.deepEqual([result.matched, result.sent], [1, 1])
+  assert.deepEqual([result.matched, result.sent], [3, 3])
   assert.match(sent[0], /major/)
-  assert.deepEqual(requested, ['PGL/2026/Singapore/Stage_1', 'PGL/2026/Singapore', 'PGL/2026/Fall', 'Local/Cup'])
+  assert.deepEqual(requested, ['Local/Cup', 'Other/Cup'])
   feature.values.tiers = []
   feature.seen = {}
   const valveOnly = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
@@ -39,7 +41,8 @@ test('Liquipedia 与 Valve Tier 分别筛选，同一赛事需同时匹配', asy
   feature.seen = {}
   const liquipediaOnly = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
   assert.equal(liquipediaOnly.matched, 2)
-  assert.equal(requested.length, 4)
+  assert.deepEqual(requested, ['Local/Cup', 'Other/Cup', 'PGL/2026/Singapore/Stage_1',
+    'PGL/2026/Singapore', 'PGL/2026/Fall'])
 })
 
 test('读取 Valve Tier 失败时报告错误，不缓存为无等级', async () => {
@@ -58,6 +61,22 @@ test('读取 Valve Tier 失败时报告错误，不缓存为无等级', async ()
   await assert.rejects(provider({ feature, settings: { deliveryMethod: 'upstream-sdk' },
     target: { sessionId: 'one' }, now: () => now }), /暂时不可用/)
   assert.equal(feature.tierCache?.['PGL/2026/Singapore/Stage_1'], undefined)
+})
+
+test('Liquipedia Tier 已匹配时不因 Valve Tier 查询失败漏发', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  const page = 'PGL/2026/Singapore/Stage_1'
+  const feature = { source: { id: 'liquipedia' }, noticeMode: 'pre-match', leadMinutes: 60,
+    values: { teams: [], tiers: ['S'], valveTiers: ['Major'] }, seen: {}, tierCache: { [page]: 'S' } }
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [{ id: 'match', tournament: 'Major', tournamentPage: page,
+      timestamp: Math.floor((now + 60_000) / 1000), teamA: 'A', teamB: 'B' }],
+    loadTournamentPage: async () => { throw new Error('Liquipedia 暂时不可用') },
+    upstreamSender: { send: async () => {} },
+  })
+  const result = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now })
+  assert.deepEqual([result.matched, result.sent], [1, 1])
 })
 
 test('三种固定通知使用各自的赛事分组、对阵卡与胜者播报', async () => {

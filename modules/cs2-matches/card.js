@@ -521,7 +521,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
             h('input', { type: 'checkbox', checked: valveTiers.includes(option), onChange: (event) => setValveTiers((current) =>
               event.target.checked ? [...current, option] : current.filter((item) => item !== option)) }),
             option))),
-        h('span', { style: styles.desc }, '可多选；留空表示全部。与 Liquipedia Tier 同时筛选。'),
+        h('span', { style: styles.desc }, '可多选；两组条件任一符合即可，均留空表示全部。'),
       ),
     )),
     configSection('03', '通知规则', '每日汇总、赛前提醒与赛果提醒可独立启用；同一场比赛可依次收到三种通知。',
