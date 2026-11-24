@@ -222,10 +222,11 @@ export function configFromInput(entry, input) {
         .slice(0, MAX_TEAMS)
       values[field.key] = [...new Set(list)]
     } else if (field.kind === 'options') {
-      const allowed = new Set(field.options)
+      const allowed = new Map(field.options.map((option) => [option.toUpperCase(), option]))
       values[field.key] = [...new Set((Array.isArray(raw) ? raw : [])
         .map((item) => String(item).trim().toUpperCase())
-        .filter((item) => allowed.has(item)))]
+        .filter((item) => allowed.has(item))
+        .map((item) => allowed.get(item)))]
     } else {
       values[field.key] = String(raw ?? '').slice(0, MAX_VALUE_LENGTH)
     }

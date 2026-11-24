@@ -142,6 +142,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [teams, setTeams] = useState(Array.isArray(values.teams) ? values.teams : [])
   const [teamDraft, setTeamDraft] = useState('')
   const [tiers, setTiers] = useState(Array.isArray(values.tiers) ? values.tiers : [])
+  const [valveTiers, setValveTiers] = useState(Array.isArray(values.valveTiers) ? values.valveTiers : [])
   const [sessionIds, setSessionIds] = useState(feature.target?.sessionIds ?? [])
   const [sourceId, setSourceId] = useState(feature.source?.id ?? 'custom')
   const [baseUrl, setBaseUrl] = useState(feature.source?.baseUrl ?? '')
@@ -195,6 +196,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     values: {
       teams: commitTeams(),
       tiers,
+      valveTiers,
     },
     ...(overrides ?? {}),
   })
@@ -254,7 +256,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   }
 
   const status = featureStatus(feature)
-  const tierOptions = feature.fields?.find((field) => field.kind === 'options')?.options ?? []
+  const tierOptions = feature.fields?.find((field) => field.key === 'tiers')?.options ?? []
+  const valveTierOptions = feature.fields?.find((field) => field.key === 'valveTiers')?.options ?? []
   const targetOptions = featureTargetOptions(sessions, sessionIds, settings?.defaultTargetSessionIds ?? [])
 
   const collapse = (event) => {
@@ -508,8 +511,17 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
         }),
       ),
       h('div', { style: styles.field },
-        h('span', { style: styles.label }, '赛事等级'),
+        h('span', { style: styles.label }, 'Liquipedia Tier'),
         h(TierRange, { options: tierOptions, tiers, onChange: setTiers }),
+      ),
+      h('div', { style: styles.field },
+        h('span', { style: styles.label }, 'Valve Tier'),
+        h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 14px' } },
+          ...valveTierOptions.map((option) => h('label', { key: option, style: { display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' } },
+            h('input', { type: 'checkbox', checked: valveTiers.includes(option), onChange: (event) => setValveTiers((current) =>
+              event.target.checked ? [...current, option] : current.filter((item) => item !== option)) }),
+            option))),
+        h('span', { style: styles.desc }, '可多选；留空表示全部。与 Liquipedia Tier 同时筛选。'),
       ),
     )),
     configSection('03', '通知规则', '每日汇总、赛前提醒与赛果提醒可独立启用；同一场比赛可依次收到三种通知。',

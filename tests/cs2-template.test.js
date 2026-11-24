@@ -10,6 +10,18 @@ function runtimeAt(path) {
   return createFeatureRuntime({ ctx: { get: () => undefined }, statePath: path })
 }
 
+test('旧配置默认不筛 Valve Tier，新配置保存独立的 Valve Tier 选项', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'qqbot-valve-tier-')), 'state.json')
+  writeFileSync(path, JSON.stringify({ features: { 'cs2-matches': { enabled: false, values: { teams: [], tiers: ['S'] } } } }), 'utf8')
+  const runtime = runtimeAt(path)
+  const before = (await runtime.snapshot()).features.find((item) => item.id === 'cs2-matches')
+  assert.deepEqual(before.values.valveTiers ?? [], [])
+  await runtime.save('cs2-matches', { ...before, values: { ...before.values, valveTiers: ['Major', 'Tier 2', 'invalid'] } })
+  const after = (await runtime.snapshot()).features.find((item) => item.id === 'cs2-matches')
+  assert.deepEqual(after.values.tiers, ['S'])
+  assert.deepEqual(after.values.valveTiers, ['Major', 'Tier 2'])
+})
+
 test('旧 CS2 配置默认固定内容，模板与全局投递方式可保存并重新读取', async () => {
   const path = join(mkdtempSync(join(tmpdir(), 'qqbot-cs2-template-')), 'state.json')
   writeFileSync(path, JSON.stringify({ features: { 'cs2-matches': { enabled: false, values: { teams: [], tiers: [] } } } }), 'utf8')

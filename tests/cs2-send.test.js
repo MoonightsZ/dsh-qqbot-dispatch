@@ -6,6 +6,60 @@ import { join } from 'node:path'
 import { createLiquipediaProvider, previewCs2FixedNotice } from '../modules/cs2-matches/provider.js'
 import { createFeatureRuntime } from '../features.js'
 
+test('Liquipedia 与 Valve Tier 分别筛选，同一赛事需同时匹配', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  const match = (id, page) => ({ id, tournament: id, tournamentPage: page,
+    timestamp: Math.floor((now + 60_000) / 1000), teamA: 'A', teamB: 'B', pageA: 'A', pageB: 'B', bestOf: 1 })
+  const pages = {
+    'PGL/2026/Singapore/Stage_1': '|liquipediatier=S-Tier\n',
+    'PGL/2026/Singapore': '|liquipediatier=S-Tier\n|publishertier=Major\n',
+    'PGL/2026/Fall': '|liquipediatier=S-Tier\n|publishertier=Tier 1\n',
+    'Local/Cup': '|liquipediatier=B-Tier\n|publishertier=Major\n',
+  }
+  const requested = []
+  const sent = []
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [match('major', 'PGL/2026/Singapore/Stage_1'), match('tier1', 'PGL/2026/Fall'), match('b-major', 'Local/Cup')],
+    loadTournamentPage: async (page) => { requested.push(page); return pages[page] ?? '' },
+    upstreamSender: { send: async ({ text }) => sent.push(text) },
+  })
+  const feature = { source: { id: 'liquipedia' }, noticeMode: 'pre-match', leadMinutes: 60,
+    values: { teams: [], tiers: ['S'], valveTiers: ['Major'] }, seen: {},
+    tierCache: { 'PGL/2026/Singapore/Stage_1': 'S', 'PGL/2026/Fall': 'S', 'Local/Cup': 'B' } }
+  const result = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
+  assert.deepEqual([result.matched, result.sent], [1, 1])
+  assert.match(sent[0], /major/)
+  assert.deepEqual(requested, ['PGL/2026/Singapore/Stage_1', 'PGL/2026/Singapore', 'PGL/2026/Fall', 'Local/Cup'])
+  feature.values.tiers = []
+  feature.seen = {}
+  const valveOnly = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
+  assert.equal(valveOnly.matched, 2)
+  feature.values.tiers = ['S']
+  feature.values.valveTiers = []
+  feature.seen = {}
+  const liquipediaOnly = await provider({ feature, settings: { deliveryMethod: 'upstream-sdk' }, target: { sessionId: 'one' }, now: () => now })
+  assert.equal(liquipediaOnly.matched, 2)
+  assert.equal(requested.length, 4)
+})
+
+test('读取 Valve Tier 失败时报告错误，不缓存为无等级', async () => {
+  const now = Date.parse('2026-11-24T04:00:00Z')
+  const feature = { source: { id: 'liquipedia' }, noticeMode: 'pre-match', leadMinutes: 60,
+    values: { teams: [], tiers: [], valveTiers: ['Major'] }, seen: {} }
+  const provider = createLiquipediaProvider({
+    loadMatches: async () => [{ id: 'major', tournament: 'PGL Major', tournamentPage: 'PGL/2026/Singapore/Stage_1',
+      timestamp: Math.floor((now + 60_000) / 1000), teamA: 'A', teamB: 'B' }],
+    loadTournamentPage: async (page) => {
+      if (page.endsWith('/Stage_1')) return '|liquipediatier=S-Tier\n'
+      throw new Error('Liquipedia 暂时不可用')
+    },
+    upstreamSender: { send: async () => { throw new Error('不应发送') } },
+  })
+  await assert.rejects(provider({ feature, settings: { deliveryMethod: 'upstream-sdk' },
+    target: { sessionId: 'one' }, now: () => now }), /暂时不可用/)
+  assert.equal(feature.tierCache?.['PGL/2026/Singapore/Stage_1'], undefined)
+})
+
 test('三种固定通知使用各自的赛事分组、对阵卡与胜者播报', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const match = (id, tournament, minutes, scoreA = null, scoreB = null, bestOf = 3) => ({

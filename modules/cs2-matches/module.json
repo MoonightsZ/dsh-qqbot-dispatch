@@ -5,7 +5,8 @@
   "provider": null,
   "fields": [
     { "key": "teams", "kind": "list", "label": "关注队伍" },
-    { "key": "tiers", "kind": "options", "label": "关注赛事等级", "options": ["S", "A", "B", "C"] }
+    { "key": "tiers", "kind": "options", "label": "Liquipedia Tier", "options": ["S", "A", "B", "C"] },
+    { "key": "valveTiers", "kind": "options", "label": "Valve Tier", "options": ["Major", "Tier 1", "Tier 2", "Wildcard"] }
   ],
   "defaults": { "source": { "id": "custom" }, "intervalMinutes": 60, "scheduleMode": "interval", "cron": [] }
 }

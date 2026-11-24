@@ -80,6 +80,39 @@ export function parseMatches(html) {
       scoreB: scores.length === 2 && scores.every(Number.isSafeInteger) ? scores[1] : null,
     })
   }
+  for (const chunk of text.split('<div class="match-ticker-card">').slice(1)) {
+    const timestamp = Number(/data-timestamp="(\d+)"/.exec(chunk)?.[1] ?? 0)
+    if (!timestamp) continue
+    const opponentsHtml = chunk.split(/<div class="match-ticker-card-tournament(?: [^"]*)?">/)[0]
+    const opponents = opponentsHtml.split(/<div class="match-ticker-card&#95;&#95;opponent(?: [^"]*)?">/).slice(1, 3)
+    if (opponents.length < 2) continue
+    const teams = opponents.map((opponent) => /class="name(?: [^"]*)?"[^>]*>\s*<a href="\/counterstrike\/(?:index\.php\?title=)?([^"#?&]+)[^"]*"[^>]*title="([^"]*)"/.exec(opponent))
+    if (teams.some((team) => team === null)) continue
+    const tournament = /class="match-ticker-card-tournament-name"[\s\S]*?<a href="\/counterstrike\/([^"#?]+)[^"]*"[^>]*>\s*([^<]+)/.exec(chunk)
+    const logos = opponents.map((opponent) => /team-template-image-icon[^>]*>\s*<a[^>]*>\s*<img[^>]*src="([^"]+)"/.exec(opponent)?.[1] ?? null)
+      .map((src) => src === null ? null : src.startsWith('http') ? src : `https://liquipedia.net${src}`)
+    const scores = opponents.map((opponent) => {
+      const value = /<\/a><\/span><\/div><div>\s*(\d+)\s*<\/div>\s*<\/div>/.exec(opponent)?.[1]
+      return value === undefined ? null : Number(value)
+    })
+    const bestOf = /match-ticker-card&#95;&#95;header[\s\S]*?\bBo(\d+)/.exec(opponentsHtml)?.[1]
+    rows.push({
+      id: `${timestamp}|${teams[0][1]}|${teams[1][1]}`,
+      timestamp,
+      teamA: teams[0][2].replace(/ \(page does not exist\)$/, '') || teams[0][1].replace(/_/g, ' '),
+      teamB: teams[1][2].replace(/ \(page does not exist\)$/, '') || teams[1][1].replace(/_/g, ' '),
+      pageA: teams[0][1],
+      pageB: teams[1][1],
+      tournament: tournament?.[2] ?? 'Unknown event',
+      tournamentPage: tournament?.[1] ?? '',
+      logoA: logos[0],
+      logoB: logos[1],
+      bestOf: bestOf === undefined ? null : Number(bestOf),
+      finished: /data-finished="finished"/.test(opponentsHtml),
+      scoreA: scores[0],
+      scoreB: scores[1],
+    })
+  }
   return rows
 }
 
@@ -96,6 +129,15 @@ function normalizeTier(raw) {
   if (text === '3') return 'B'
   if (text === '4') return 'C'
   return 'M'
+}
+
+function normalizeValveTier(raw) {
+  const value = String(raw ?? '').trim().toLowerCase()
+  if (value === 'major' || value === 'major championship') return 'Major'
+  if (value === 'tier 1') return 'Tier 1'
+  if (value === 'tier 2') return 'Tier 2'
+  if (value === 'wildcard') return 'Wildcard'
+  return ''
 }
 
 function matchesTeams(watched, match) {
@@ -123,24 +165,29 @@ function formatDayTime(timestamp, timeZone = 'Asia/Shanghai') {
   }
 }
 
-/** Tournament tier from the page wikitext, cached in the feature state. */
-async function tournamentTier(feature, page) {
-  if (page === '') return 'M'
-  if (feature.tierCache?.[page] !== undefined) return feature.tierCache[page]
-  let tier = 'M'
+/** The two independent tournament tiers; old string cache entries remain readable. */
+async function tournamentTiers(feature, page, readPage, needValve) {
+  if (page === '') return { liquipedia: 'M', valve: '' }
+  const cached = feature.tierCache?.[page]
+  if (typeof cached === 'string' && !needValve) return { liquipedia: cached, valve: '' }
+  if (cached && typeof cached === 'object' && (!needValve || cached.valve !== undefined)) return cached
+  let content = ''
   try {
-    const data = await apiJson(
-      `${API}?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&formatversion=2&titles=${encodeURIComponent(page)}`,
-      'query',
-    )
-    const content = data?.query?.pages?.[0]?.revisions?.[0]?.slots?.main?.content ?? ''
-    tier = normalizeTier(/liquipediatier\s*=\s*([^\n|]+)/.exec(content)?.[1])
-  } catch {
-    tier = 'M'
+    content = await readPage(page)
+  } catch (error) {
+    if (needValve) throw error
+    content = ''
+  }
+  const liquipedia = content ? normalizeTier(/liquipediatier\s*=\s*([^\n|]+)/.exec(content)?.[1])
+    : typeof cached === 'string' ? cached : cached?.liquipedia ?? 'M'
+  let valve = normalizeValveTier(/publishertier\s*=\s*([^\n|]+)/.exec(content)?.[1])
+  if (needValve && valve === '' && /\/(?:Stage[_ ]\d+|Playoffs|Group[_ ]Stage)$/i.test(page)) {
+    valve = (await tournamentTiers(feature, page.slice(0, page.lastIndexOf('/')), readPage, true)).valve
   }
   if (feature.tierCache === undefined) feature.tierCache = {}
-  feature.tierCache[page] = tier
-  return tier
+  const tiers = { liquipedia, valve }
+  feature.tierCache[page] = tiers
+  return tiers
 }
 
 
@@ -365,6 +412,10 @@ function pruneSeen(feature, checkedAt) {
 export function createLiquipediaProvider(options = {}) {
   const notificationDispatcher = options.notificationDispatcher ?? createNotificationDispatcher(options)
   const readMatches = options.loadMatches ?? loadMatches
+  const readTournamentPage = options.loadTournamentPage ?? (async (page) => {
+    const data = await apiJson(`${API}?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&formatversion=2&titles=${encodeURIComponent(page)}`, 'query')
+    return data?.query?.pages?.[0]?.revisions?.[0]?.slots?.main?.content ?? ''
+  })
   return async ({ feature, settings, target, now, forceResend = false, noticeMode: requestedNoticeMode, eligibleAt }) => {
     const sourceId = feature.source?.id ?? 'none'
     if (sourceId === 'none') return { matched: 0, sent: 0, error: '数据源尚未接入' }
@@ -383,6 +434,7 @@ export function createLiquipediaProvider(options = {}) {
     const leadMinutes = Math.min(360, Math.max(15, Number(feature.leadMinutes) || 60))
     const watched = Array.isArray(feature.values?.teams) ? feature.values.teams : []
     const wantedTiers = Array.isArray(feature.values?.tiers) ? feature.values.tiers : []
+    const wantedValveTiers = Array.isArray(feature.values?.valveTiers) ? feature.values.valveTiers : []
     const candidates = matches.filter((match) => {
       const at = match.timestamp * 1000
       if (!matchesTeams(watched, match)) return false
@@ -395,12 +447,17 @@ export function createLiquipediaProvider(options = {}) {
     })
 
     const tiers = new Map()
+    const valveTiers = new Map()
     let selected = candidates
-    if (wantedTiers.length > 0) {
+    if (wantedTiers.length > 0 || wantedValveTiers.length > 0) {
       for (const page of new Set(candidates.map((match) => match.tournamentPage))) {
-        tiers.set(page, await tournamentTier(feature, page))
+        const classification = await tournamentTiers(feature, page, readTournamentPage, wantedValveTiers.length > 0)
+        tiers.set(page, classification.liquipedia)
+        valveTiers.set(page, classification.valve)
       }
-      selected = candidates.filter((match) => wantedTiers.includes(tiers.get(match.tournamentPage) ?? 'M'))
+      selected = candidates.filter((match) =>
+        (wantedTiers.length === 0 || wantedTiers.includes(tiers.get(match.tournamentPage) ?? 'M')) &&
+        (wantedValveTiers.length === 0 || wantedValveTiers.includes(valveTiers.get(match.tournamentPage) ?? '')))
     }
 
     pruneSeen(feature, checkedAt)

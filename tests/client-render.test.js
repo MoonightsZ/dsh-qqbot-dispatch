@@ -196,6 +196,7 @@ test('有功能資料時可繪製設定卡片', () => {
       values: { teams: [], tiers: [] }, fields: [
         { key: 'teams', kind: 'list', label: '隊伍' },
         { key: 'tiers', kind: 'options', label: '等級', options: ['S', 'A'] },
+        { key: 'valveTiers', kind: 'options', label: 'Valve Tier', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'] },
       ], intervalMinutes: 60, scheduleMode: 'cron', cron: ['0 9 * * 1', '30 10 * * 0'], timeZone: 'Asia/Shanghai', nextRunAt: Date.parse('2026-11-09T01:00:00Z'),
       credential: { configured: false, writable: false },
     },
@@ -213,11 +214,57 @@ test('有功能資料時可繪製設定卡片', () => {
   assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知规则', '模板选择', '通知内容'])
   assert.match(JSON.stringify(view), /每日汇总/)
   assert.match(JSON.stringify(view), /赛前提醒/)
+  assert.match(JSON.stringify(view), /Valve Tier/)
+  assert.match(JSON.stringify(view), /Major/)
   assert.doesNotMatch(JSON.stringify(view), /旧版通知/)
   assert.match(JSON.stringify(view), /添加规则/)
   assert.match(JSON.stringify(view), /执行时间/)
   assert.match(JSON.stringify(view), /保存后更新下次执行时间/)
   assert.match(JSON.stringify(view), /TargetPicker|inheritLabel/)
+})
+
+test('Valve Tier 多选项与 Liquipedia Tier 分别保存', async () => {
+  const state = []
+  let cursor = 0
+  const StatefulReact = { useState: (initial) => {
+    const index = cursor++
+    if (!(index in state)) state[index] = initial
+    return [state[index], (next) => { state[index] = typeof next === 'function' ? next(state[index]) : next }]
+  } }
+  let payload
+  let finish
+  const done = new Promise((resolve) => { finish = resolve })
+  const FeatureCard = createFeatureCard({ React: StatefulReact, h, C, styles, ...common,
+    FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (_path, body) => { payload = body; finish(); return { features: [{ id: body.id, enabled: false }] } },
+  })
+  const props = { feature: { id: 'cs2-matches', enabled: false, source: { id: 'none' },
+    target: { sessionIds: ['session-1'] }, values: { teams: [], tiers: ['S'], valveTiers: [] },
+    fields: [{ key: 'tiers', options: ['S', 'A', 'B', 'C'] },
+      { key: 'valveTiers', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'] }], credential: {} },
+  sessions: [{ sessionId: 'session-1', title: '通知群', scope: 'group' }], open: true,
+  onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {} }
+  const render = () => { cursor = 0; return FeatureCard(props) }
+  const nodes = (view, type) => {
+    const result = []
+    const visit = (node) => {
+      if (Array.isArray(node)) { node.forEach(visit); return }
+      if (!node || typeof node !== 'object') return
+      if (node.type === type) result.push(node)
+      node.children?.forEach(visit)
+    }
+    visit(view)
+    return result
+  }
+  const view = render()
+  const major = nodes(view, 'label').find((node) => node.children.includes('Major'))
+  major.children[0].props.onChange({ target: { checked: true } })
+  const updated = render()
+  assert.equal(nodes(updated, 'label').find((node) => node.children.includes('Major')).children[0].props.checked, true)
+  nodes(updated, 'button').find((node) => node.children.includes('保存')).props.onClick()
+  await done
+  assert.deepEqual(payload.values.tiers, ['S'])
+  assert.deepEqual(payload.values.valveTiers, ['Major'])
 })
 
 test('启用赛前提醒不会关闭每日汇总，并保存各自检查计划', async () => {

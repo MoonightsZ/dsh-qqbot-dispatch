@@ -6,6 +6,7 @@ export const definition = {
   providerLabel: '未接入',
   fields: [
     { key: 'teams', label: '关注队伍', kind: 'list', placeholder: '例如 Spirit, Vitality', hint: '留空表示全部队伍' },
-    { key: 'tiers', label: '关注赛事等级', kind: 'options', options: ['S', 'A', 'B', 'C'], hint: '留空表示全部等级' },
+    { key: 'tiers', label: 'Liquipedia Tier', kind: 'options', options: ['S', 'A', 'B', 'C'], hint: '留空表示全部等级' },
+    { key: 'valveTiers', label: 'Valve Tier', kind: 'options', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'], hint: '留空表示全部等级' },
   ],
 }
