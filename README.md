@@ -66,7 +66,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 | 模组 | 用途 | 详细说明 |
 | --- | --- | --- |
-| CS2 赛事通知 | 按队伍和等级筛选比赛，提供每日汇总、赛前提醒与赛果提醒。 | [查看模组说明](./modules/cs2-matches/README.md) |
+| CS2 赛事通知 | 选择 Liquipedia 或 PandaScore，按队伍和渠道等级筛选比赛，提供每日汇总、赛前提醒与赛果提醒。 | [查看模组说明](./modules/cs2-matches/README.md) |
 | 偶尔闲聊 | 按概率、小时冷却和安静时段，偶尔在指定会话发起聊天。 | [查看模组说明](./modules/casual-chat/README.md) |
 
 ### 全局默认目标会话
@@ -110,7 +110,7 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 | --- | --- |
 | 功能状态、全局默认目标与投递设置 | `~/.dsh-qqbot/dispatch-features.json` |
 | 群名缓存、群可用状态 | `~/.dsh-qqbot/group-names.json`、`~/.dsh-qqbot/group-health.json` |
-| 数据源 API Key | 宿主凭证服务；不写入功能状态文件。 |
+| 数据源 API Key | 宿主凭证服务，CS2 的 Liquipedia 与 PandaScore 使用独立凭证引用；不写入功能状态文件。 |
 | QQ Bot 的 AppID／AppSecret | profile 中的 `im-qqbot` 配置。 |
 
 ### 本插件的设计边界

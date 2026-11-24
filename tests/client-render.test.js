@@ -192,7 +192,7 @@ test('有功能資料時可繪製設定卡片', () => {
   const view = FeatureCard({
     feature: {
       id: 'cs2-matches', label: 'CS2 賽事通知', enabled: false,
-      source: { id: 'none', baseUrl: '' }, sources: [], target: { sessionIds: [] },
+      source: { id: 'liquipedia', baseUrl: '' }, sources: [], target: { sessionIds: [] },
       values: { teams: [], tiers: [] }, fields: [
         { key: 'teams', kind: 'list', label: '隊伍' },
         { key: 'tiers', kind: 'options', label: '等級', options: ['S', 'A'] },
@@ -223,6 +223,26 @@ test('有功能資料時可繪製設定卡片', () => {
   assert.match(JSON.stringify(view), /TargetPicker|inheritLabel/)
 })
 
+test('CS2 渠道能力控制显示的 Tier 设置', () => {
+  const FeatureCard = createFeatureCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
+  const base = { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, tierMode: 'channel',
+    target: { sessionIds: [] }, values: { teams: [], tiers: [], valveTiers: [] },
+    fields: [{ key: 'tiers', options: ['S', 'A', 'B', 'C', 'D'] },
+      { key: 'valveTiers', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'] }],
+    sources: [{ id: 'liquipedia', label: 'Liquipedia', hasValveTier: true },
+      { id: 'pandascore', label: 'PandaScore', hasValveTier: false }], credential: {} }
+  const props = { sessions: [], open: true, onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {} }
+  const panda = JSON.stringify(FeatureCard({ ...props, feature: { ...base, source: { id: 'pandascore' } } }))
+  assert.match(panda, /PandaScore Tier/)
+  assert.match(panda, /API Key/)
+  assert.doesNotMatch(panda, /Major|Wildcard/)
+  assert.doesNotMatch(panda, /接口地址（可选）/)
+  const liquipedia = JSON.stringify(FeatureCard({ ...props, feature: { ...base, source: { id: 'liquipedia' } } }))
+  assert.match(liquipedia, /Valve Tier|Major/)
+  assert.doesNotMatch(liquipedia, /API Key/)
+  assert.doesNotMatch(liquipedia, /Liquipedia Tier（旧配置）/)
+})
+
 test('Valve Tier 多选项与 Liquipedia Tier 分别保存', async () => {
   const state = []
   let cursor = 0
@@ -238,7 +258,7 @@ test('Valve Tier 多选项与 Liquipedia Tier 分别保存', async () => {
     FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
     postJson: async (_path, body) => { payload = body; finish(); return { features: [{ id: body.id, enabled: false }] } },
   })
-  const props = { feature: { id: 'cs2-matches', enabled: false, source: { id: 'none' },
+  const props = { feature: { id: 'cs2-matches', enabled: false, source: { id: 'liquipedia' },
     target: { sessionIds: ['session-1'] }, values: { teams: [], tiers: ['S'], valveTiers: [] },
     fields: [{ key: 'tiers', options: ['S', 'A', 'B', 'C'] },
       { key: 'valveTiers', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'] }], credential: {} },
@@ -265,6 +285,33 @@ test('Valve Tier 多选项与 Liquipedia Tier 分别保存', async () => {
   await done
   assert.deepEqual(payload.values.tiers, ['S'])
   assert.deepEqual(payload.values.valveTiers, ['Major'])
+  assert.equal(payload.tierMode, 'channel')
+})
+
+test('旧 Liquipedia 来源 Tier 单独筛选时保存仍保留旧语义', async () => {
+  let payload
+  let finish
+  const done = new Promise((resolve) => { finish = resolve })
+  const FeatureCard = createFeatureCard({ React, h, C, styles, ...common,
+    FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run',
+    postJson: async (_path, body) => { payload = body; finish(); return { features: [{ id: body.id, enabled: false }] } },
+  })
+  const view = FeatureCard({ feature: { id: 'cs2-matches', enabled: false, tierMode: 'legacy',
+    source: { id: 'liquipedia' }, target: { sessionIds: ['session-1'] },
+    values: { teams: [], tiers: ['S'], valveTiers: [] },
+    fields: [{ key: 'tiers', options: ['S', 'A', 'B', 'C'] },
+      { key: 'valveTiers', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'] }], credential: {} },
+  sessions: [{ sessionId: 'session-1', title: '通知群', scope: 'group' }], open: true,
+  onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {} })
+  const findSave = (node) => {
+    if (Array.isArray(node)) return node.map(findSave).find(Boolean)
+    if (!node || typeof node !== 'object') return null
+    if (node.type === 'button' && node.children?.includes('保存')) return node
+    return node.children?.map(findSave).find(Boolean)
+  }
+  findSave(view).props.onClick()
+  await done
+  assert.equal(payload.tierMode, 'legacy')
 })
 
 test('启用赛前提醒不会关闭每日汇总，并保存各自检查计划', async () => {

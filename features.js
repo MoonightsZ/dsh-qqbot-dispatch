@@ -28,7 +28,10 @@ import {
 } from './modules/cs2-matches/template.js'
 import { normalizeTopics } from './modules/casual-chat/topics.js'
 import { CS2_RULE_IDS, defaultCs2NoticeRules, migrateCs2NoticeRules } from './modules/cs2-matches/rules.js'
+import { credentialRefFor } from './credential-ref.js'
+import { CS2_SOURCES } from './modules/cs2-matches/sources.js'
 export { cronMatches, parseCronList } from './cron.js'
+export { credentialRefFor } from './credential-ref.js'
 
 /** State document shared by every feature toggle. */
 export const STATE_PATH = resolve(homedir(), '.dsh-qqbot', 'dispatch-features.json')
@@ -63,11 +66,6 @@ function descriptor(id, entries = FEATURES) {
   return found
 }
 
-/** Credential reference for one feature's API key — a POSIX identifier, never the value. */
-export function credentialRefFor(featureId) {
-  return `QQBOT_DISPATCH_${String(featureId).toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`
-}
-
 function defaultValues(entry) {
   const values = {}
   for (const field of entry.fields) values[field.key] = field.default ?? []
@@ -78,7 +76,7 @@ function defaultFeature(entry) {
   return {
     enabled: false,
     target: { sessionIds: [] },
-    source: entry.defaults?.source ?? { id: 'custom', baseUrl: '' },
+    source: entry.defaults?.source ?? { id: entry.id === 'cs2-matches' ? 'liquipedia' : 'custom', baseUrl: '' },
     intervalMinutes: entry.defaults?.intervalMinutes ?? 60,
     scheduleMode: entry.defaults?.scheduleMode ?? (entry.id === 'cs2-matches' ? 'cron' : 'interval'),
     cron: entry.defaults?.cron ?? (entry.id === 'cs2-matches' ? ['0 18 * * *'] : []),
@@ -88,6 +86,7 @@ function defaultFeature(entry) {
       digestTemplate: DEFAULT_CS2_DIGEST_TEMPLATE, preMatchTemplate: DEFAULT_CS2_PRE_MATCH_TEMPLATE,
       resultTemplate: DEFAULT_CS2_RESULT_TEMPLATE,
       noticeMode: 'daily-digest', digestDay: 'tomorrow', leadMinutes: 60,
+      tierMode: 'channel',
       noticeRules: defaultCs2NoticeRules(),
     } : {}),
     values: defaultValues(entry),
@@ -146,6 +145,13 @@ function readStateFile(entries, statePath) {
         } }
       }
       if (id === 'cs2-matches') {
+        // Old none/custom values had no usable CS2 adapter; require an explicit re-enable after migration.
+        if (!CS2_SOURCES.some((source) => source.id === base.features[id].source?.id)) {
+          base.features[id].source = { id: 'liquipedia', baseUrl: '' }
+          base.features[id].enabled = false
+        }
+        // Existing tier filters used Liquipedia and Valve as a union until the user saves channel mode.
+        base.features[id].tierMode = feature.tierMode === 'channel' ? 'channel' : 'legacy'
         if (!CS2_RULE_IDS.includes(feature.noticeMode)) base.features[id].noticeMode = 'daily-digest'
         base.features[id].noticeRules = migrateCs2NoticeRules(feature)
         const migrated = migrateCs2ModeTemplates(feature.serviceTemplate)
@@ -203,7 +209,9 @@ export function configFromInput(entry, input) {
   const target = source.target !== null && typeof source.target === 'object' ? source.target : {}
   const sessionIds = submittedSessionIds(target.sessionIds ?? readSessionIds(undefined, target.sessionId))
   const sourceInput = source.source !== null && typeof source.source === 'object' ? source.source : {}
-  const sourceId = SOURCES.some((item) => item.id === sourceInput.id) ? sourceInput.id : 'none'
+  const sourceId = entry.id === 'cs2-matches'
+    ? CS2_SOURCES.some((item) => item.id === sourceInput.id) ? sourceInput.id : 'liquipedia'
+    : SOURCES.some((item) => item.id === sourceInput.id) ? sourceInput.id : 'none'
   const baseUrl = String(sourceInput.baseUrl ?? '').trim().slice(0, 300)
   const intervalMinutes = clamp(Number(source.intervalMinutes ?? 60) || 60, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES)
   const scheduleMode = source.scheduleMode === 'cron' ? 'cron' : 'interval'
@@ -241,6 +249,7 @@ export function configFromInput(entry, input) {
     intervalMinutes,
     values,
     ...(entry.id === 'cs2-matches' ? {
+      tierMode: source.tierMode === 'channel' ? 'channel' : 'legacy',
       deliveryMode: source.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: validateCs2ServiceTemplate(source.serviceTemplate),
       digestTemplate: validateCs2DigestTemplate(source.digestTemplate ?? migrateCs2ModeTemplates(source.serviceTemplate).digestTemplate),
@@ -265,7 +274,7 @@ function publicFeature(entry, feature, statePath, credential) {
     description: entry.description,
     provider: entry.provider === 'builtin' ? 'builtin' : provider,
     providerLabel: sourceLabel,
-    sources: SOURCES,
+    sources: entry.id === 'cs2-matches' ? CS2_SOURCES : SOURCES,
     source,
     credential,
     fields: entry.fields,
@@ -280,6 +289,7 @@ function publicFeature(entry, feature, statePath, credential) {
     cronDescription: feature.scheduleMode === 'cron' ? describeCron(feature.cron ?? '') : null,
     nextRunAt: nextRunAt(feature),
     ...(entry.id === 'cs2-matches' ? {
+      tierMode: feature.tierMode ?? 'legacy',
       deliveryMode: feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
       serviceTemplate: feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE,
       digestTemplate: feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE,
@@ -330,8 +340,8 @@ export function createFeatureRuntime(options) {
   const read = () => readStateFile(entries, statePath)
 
   /** Credential presence for one feature, read from the host credential store. */
-  async function credentialStatus(id) {
-    const ref = credentialRefFor(id)
+  async function credentialStatus(id, sourceId) {
+    const ref = credentialRefFor(id, sourceId)
     const credentials = ctx.get('credentials')
     if (credentials?.describe === undefined) return { ref, configured: false, writable: false }
     try {
@@ -347,7 +357,7 @@ export function createFeatureRuntime(options) {
     const features = []
     for (const entry of entries) {
       const feature = state.features[entry.id] ?? defaultFeature(entry)
-      features.push(publicFeature(entry, feature, statePath, await credentialStatus(entry.id)))
+      features.push(publicFeature(entry, feature, statePath, await credentialStatus(entry.id, feature.source?.id)))
     }
     return { features, settings: state.settings }
   }
@@ -385,7 +395,7 @@ export function createFeatureRuntime(options) {
     if (submitted.enabled && submitted.target.sessionIds.length === 0 && state.settings.defaultTargetSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
 
     const credentials = ctx.get('credentials')
-    const ref = credentialRefFor(id)
+    const ref = credentialRefFor(id, submitted.source.id)
     const secret = typeof input?.credential === 'string' ? input.credential.trim() : ''
     if (credentials !== undefined) {
       if (secret !== '') await credentials.set(ref, secret)
@@ -410,7 +420,7 @@ export function createFeatureRuntime(options) {
     }
     state.features[id] = feature
     writeStateFile(statePath, state)
-    return publicFeature(entry, feature, statePath, await credentialStatus(id))
+    return publicFeature(entry, feature, statePath, await credentialStatus(id, feature.source?.id))
   }
 
   /** A provider may later fill this in; until then a run only records the gap. */

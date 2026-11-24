@@ -1,6 +1,6 @@
 /** QQ Bot dispatch supplement for @tencent-connect/dsh-qqbot. */
 import { createFeatureRuntime } from './features.js'
-import { createLiquipediaProvider } from './modules/cs2-matches/provider.js'
+import { createCs2Provider } from './modules/cs2-matches/provider.js'
 import { createSessionResolver } from './session-resolver.js'
 import { createGroupNameStore } from './group-names.js'
 import { createGroupHealthStore } from './group-health.js'
@@ -38,7 +38,7 @@ export async function apply(ctx, config = {}) {
   for (const module of modules) {
     const id = module.definition.id
     const provider = id === 'cs2-matches'
-      ? createLiquipediaProvider({ notificationDispatcher })
+      ? createCs2Provider({ notificationDispatcher })
       : id === 'casual-chat'
         ? createChatProvider({ notificationDispatcher })
         : createLazyProvider(module.providerPath, { notificationDispatcher })

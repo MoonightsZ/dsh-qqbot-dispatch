@@ -1,18 +1,23 @@
 /**
- * Liquipedia CS2 match provider for the `cs2-matches` feature toggle.
+ * CS2 notification provider with Liquipedia and PandaScore source adapters.
  *
- * Follows https://liquipedia.net/api-terms-of-use:
+ * The Liquipedia adapter follows https://liquipedia.net/api-terms-of-use:
  * - one `action=parse` request per 30 s at most, one other API request per 2 s;
  * - a descriptive User-Agent with project contact;
  * - results cached as long as possible (in-memory parse cache + a persisted
  *   tournament-tier cache), and dispatched matches remembered so a repeat run
  *   never sends the same match twice;
- * - every message attributes Liquipedia as the source (CC BY-SA 3.0).
+ * - Liquipedia messages retain their CC BY-SA 3.0 attribution.
  *
- * @module dsh-qqbot-dispatch/liquipedia
+ * PandaScore messages carry their own source attribution and use the host vault for API access.
+ *
+ * @module dsh-qqbot-dispatch/cs2-matches
  */
 import { composeCs2FixedNoticePrompt, composeCs2ServiceTurnPrompt, migrateCs2ModeTemplates } from './template.js'
 import { createNotificationDispatcher } from '../../notification-dispatcher.js'
+import { credentialRefFor } from '../../credential-ref.js'
+import { loadPandaScoreMatches } from './pandascore.js'
+import { cs2SourceFor } from './sources.js'
 
 const API = 'https://liquipedia.net/counterstrike/api.php'
 const USER_AGENT = 'dsh-qqbot-dispatch/0.1 (DSH QQ bot plugin; +https://github.com/deepseek-ai/dsh)'
@@ -22,6 +27,12 @@ const PARSE_CACHE_MS = 15 * 60_000
 const SEEN_RETENTION_MS = 14 * 24 * 60 * 60_000
 const MAX_CHUNK_CHARS = 1800
 const TIER_NAMES = { 's-tier': 'S', 'a-tier': 'A', 'b-tier': 'B', 'c-tier': 'C', 'd-tier': 'C' }
+
+const LIQUIPEDIA_URL = 'https://liquipedia.net/counterstrike'
+function sourceUrl(item) { return item?.sourceUrl || LIQUIPEDIA_URL }
+function sourceCredit(item) {
+  return `数据来源：[${item?.sourceName || 'Liquipedia'}](${sourceUrl(item)})${item?.sourceLicense ?? ' · CC BY-SA 3.0'}`
+}
 
 let lastRequestAt = 0
 let lastParseAt = 0
@@ -177,8 +188,8 @@ function roundLabel(match) {
   return [stage === undefined ? '' : `Stage ${stage}`, match.round ?? ''].filter(Boolean).join(' · ')
 }
 
-function valveTierLabel(tier) {
-  return ` · Valve Tier：${tier || '未確認'}`
+function valveTierLabel(tier, sourceName = 'Liquipedia') {
+  return ` · ${sourceName === 'PandaScore' ? 'PandaScore Tier' : 'Valve Tier'}：${tier || '未確認'}`
 }
 
 function noticeIdentity(match) {
@@ -195,8 +206,8 @@ function composeScheduleChange(match, previousAt, timeZone, tier, checkedAt) {
   return [`# 🕒 赛程变更｜${match.tournament}`, '',
     `${match.teamA} vs ${match.teamB}${round ? ` · ${round}` : ''}`,
     `${before.day} ${before.time} → ${after.day} ${after.time}（${timeZone}，${direction} ${Math.abs(difference)} 分钟）`,
-    `Valve Tier：${tier || '未確認'}`, `赛程截至 ${checked.day} ${checked.time}，时间仍可能调整。`, '',
-    '---', `数据来源：[Liquipedia](https://liquipedia.net/counterstrike/${match.tournamentPage ?? ''}) · CC BY-SA 3.0`].join('\n')
+    `${match.sourceName === 'PandaScore' ? 'PandaScore Tier' : 'Valve Tier'}：${tier || '未確認'}`, `赛程截至 ${checked.day} ${checked.time}，时间仍可能调整。`, '',
+    '---', sourceCredit({ ...match, sourceUrl: match.sourceUrl || `${LIQUIPEDIA_URL}/${match.tournamentPage ?? ''}` })].join('\n')
 }
 
 function roundNumber(match) {
@@ -256,7 +267,7 @@ function composeRoundRecap(group, nextMatches, nextRound, tier, timeZone, checke
     `当前可见胜出队伍${winners.length > winnerLimit ? '（节选）' : ''}：${winners.length > 0 ? winners.slice(0, winnerLimit).join('、') : '暂无可确认胜者'}${winners.length > winnerLimit ? `，另有 ${winners.length - winnerLimit} 队` : ''}`,
     ...(nextRound === null ? [] : [`后续 Round ${nextRound}：${next.length > 0 ? `已列出 ${next.join('；')}` : '暂无关注队伍对局'}${nextMatches.length > 2 ? `；另有 ${nextMatches.length - 2} 场` : ''}`]),
     `数据截至 ${when.day} ${when.time}（${timeZone}）`, '', '---',
-    `数据来源：[Liquipedia](https://liquipedia.net/counterstrike/${first.tournamentPage}) · CC BY-SA 3.0`].join('\n')
+    sourceCredit({ ...first, sourceUrl: first.sourceUrl || `${LIQUIPEDIA_URL}/${first.tournamentPage}` })].join('\n')
 }
 
 /** The two independent tournament tiers; old string cache entries remain readable. */
@@ -305,6 +316,9 @@ function composeSections(matches, tiers, timeZone = 'Asia/Shanghai') {
       groups.set(key, {
         title: humanizeTournament(match.tournament, false),
         tier: tiers.get(match.tournamentPage),
+        sourceName: match.sourceName || 'Liquipedia',
+        sourceUrl: match.sourceUrl || (match.tournamentPage === '' ? LIQUIPEDIA_URL : `${LIQUIPEDIA_URL}/${match.tournamentPage}`),
+        sourceLicense: match.sourceLicense ?? ' · CC BY-SA 3.0',
         matches: [],
       })
     }
@@ -314,7 +328,7 @@ function composeSections(matches, tiers, timeZone = 'Asia/Shanghai') {
   return [...groups.values()]
     .sort((left, right) => left.matches[0].timestamp - right.matches[0].timestamp)
     .map((group) => {
-      const tierLabel = valveTierLabel(group.tier)
+      const tierLabel = valveTierLabel(group.tier, group.sourceName)
       const lines = [`# ${group.title}`, '', `共 ${group.matches.length} 场${tierLabel}`, `时区：${timeZone}`, '']
       const text = [`【CS2 赛事提醒】${group.title}`]
       const matchupLines = []
@@ -331,20 +345,20 @@ function composeSections(matches, tiers, timeZone = 'Asia/Shanghai') {
         matchupLines.push(matchup)
         text.push(`· ${when.day} ${when.time}${meta.length === 0 ? '' : ` ${meta.join(' · ')}`} ${match.teamA}　⚔　${match.teamB}`)
       }
-      lines.push('', '---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0')
-      text.push('数据来源：Liquipedia · CC BY-SA 3.0')
+      lines.push('', '---', sourceCredit(group))
+      text.push(`数据来源：${group.sourceName}${group.sourceLicense}`)
       const page = group.matches[0]?.tournamentPage ?? ''
       return {
         title: group.title, markdown: lines.join('\n'), text: text.join('\n'), matches: group.matches,
         matchupsMarkdown: [`时区：${timeZone}`, ...matchupLines].join('\n'), tier: group.tier,
-        sourceUrl: page === '' ? 'https://liquipedia.net/counterstrike' : `https://liquipedia.net/counterstrike/${page}`,
+        sourceUrl: group.sourceUrl, sourceName: group.sourceName, sourceLicense: group.sourceLicense,
       }
     })
 }
 
 function composePreMatchSection(group, matches, tiers, timeZone) {
   const selected = composeSections(matches, tiers, timeZone)[0]
-  const tierLabel = valveTierLabel(group.tier)
+  const tierLabel = valveTierLabel(group.tier, group.sourceName)
   const lines = [`# ⚔ 即将开赛｜${group.title}`, '', `共 ${matches.length} 场${tierLabel}`, `时区：${timeZone}`, '']
   for (const match of matches) {
     const when = formatDayTime(match.timestamp, timeZone)
@@ -352,7 +366,7 @@ function composePreMatchSection(group, matches, tiers, timeZone) {
     const round = roundLabel(match)
     lines.push(`- **${match.teamA} vs ${match.teamB}**`, `  开赛：${when.day} ${when.time}${bo}${round ? ` · ${round}` : ''}`)
   }
-  lines.push('', '---', `数据来源：[Liquipedia](${group.sourceUrl}) · CC BY-SA 3.0`)
+  lines.push('', '---', sourceCredit(group))
   return { ...selected, markdown: lines.join('\n') }
 }
 
@@ -392,7 +406,7 @@ function composeDailyDigest(matches, tiers, dayKey, timeZone, part = '') {
   const scheduleMarkdown = sections.map((section) => section.markdown.split('\n\n---\n')[0].replace(/^# /, '## ')).join('\n')
   const lines = [`# 📅 CS2 ${dayKey} 赛程${part} · 共 ${matches.length} 场`, `时区：${timeZone}`, '']
   for (const section of sections) {
-    const tierLabel = valveTierLabel(section.tier)
+    const tierLabel = valveTierLabel(section.tier, section.sourceName)
     lines.push(`## ${section.title}${tierLabel}`)
     for (const match of section.matches) {
       const when = formatDayTime(match.timestamp, timeZone)
@@ -402,12 +416,13 @@ function composeDailyDigest(matches, tiers, dayKey, timeZone, part = '') {
     }
     lines.push('')
   }
-  lines.push('---', '数据来源：[Liquipedia](https://liquipedia.net/counterstrike) · CC BY-SA 3.0')
+  lines.push('---', sourceCredit(matches[0]))
   const markdown = lines.join('\n')
   return {
     title: `CS2 ${dayKey} 赛程${part}`, markdown, text: markdown, matches,
     matchupsMarkdown: sections.map((section) => section.matchupsMarkdown).join('\n'), scheduleMarkdown,
-    sourceUrl: 'https://liquipedia.net/counterstrike',
+    sourceUrl: sourceUrl(matches[0]), sourceName: matches[0]?.sourceName || 'Liquipedia',
+    sourceLicense: matches[0]?.sourceLicense ?? ' · CC BY-SA 3.0',
   }
 }
 
@@ -432,14 +447,14 @@ function composeResultSection(group, matches, timeZone) {
     const when = formatDayTime(match.timestamp, timeZone)
     return `- 🕒 开赛 **${when.day} ${when.time}**　**${match.teamA} ${match.scoreA} : ${match.scoreB} ${match.teamB}**${roundLabel(match) ? ` · ${roundLabel(match)}` : ''}`
   })].join('\n')
-  const lines = [`# 🏁 已确认赛果｜${group.title}`, '', `共 ${matches.length} 场${valveTierLabel(group.tier)}`, `时区：${timeZone}`, '']
+  const lines = [`# 🏁 已确认赛果｜${group.title}`, '', `共 ${matches.length} 场${valveTierLabel(group.tier, group.sourceName)}`, `时区：${timeZone}`, '']
   for (const match of matches) {
     const score = `${match.teamA} **${match.scoreA} : ${match.scoreB}** ${match.teamB}`
     if (match.scoreA !== match.scoreB) {
       lines.push(`- 🏆 **${match.scoreA > match.scoreB ? match.teamA : match.teamB} 获胜**${roundLabel(match) ? ` · ${roundLabel(match)}` : ''}`, `  ${score}`)
     } else lines.push(`- ${score}${roundLabel(match) ? ` · ${roundLabel(match)}` : ''}`)
   }
-  lines.push('', '---', `数据来源：[Liquipedia](${group.sourceUrl}) · CC BY-SA 3.0`)
+  lines.push('', '---', sourceCredit(group))
   const markdown = lines.join('\n')
   return { ...group, matches, markdown, text: markdown, resultsMarkdown }
 }
@@ -461,13 +476,15 @@ function composeResultSections(matches, tiers, timeZone) {
 }
 
 /** Show the fixed Markdown layout with representative data, using the send renderer. */
-export function previewCs2FixedNotice(mode, timeZone = 'Asia/Shanghai') {
+export function previewCs2FixedNotice(mode, timeZone = 'Asia/Shanghai', sourceId = 'liquipedia') {
   const timestamp = Math.floor((Date.now() + (mode === 'result' ? -60 * 60_000 : 24 * 60 * 60_000)) / 1000)
   const match = {
     id: 'preview', timestamp, tournament: '示例赛事', tournamentPage: '',
     teamA: '队伍 A', teamB: '队伍 B', bestOf: 3, finished: true, scoreA: 2, scoreB: 1,
+    ...(sourceId === 'pandascore' ? { sourceName: 'PandaScore', sourceUrl: 'https://www.pandascore.co/',
+      sourceLicense: '', sourceTier: 'S' } : {}),
   }
-  const tiers = new Map()
+  const tiers = new Map(sourceId === 'pandascore' ? [['', 'S']] : [])
   return mode === 'daily-digest'
     ? composeDailyDigest([match], tiers, calendarDayKey(timestamp * 1000, timeZone), timeZone).markdown
     : mode === 'result' ? composeResultSections([match], tiers, timeZone)[0].markdown
@@ -505,9 +522,12 @@ function pruneSeen(feature, checkedAt) {
  * Build the provider the feature runtime calls.
  * @returns a provider receiving `{ feature, target, ctx, now }`.
  */
-export function createLiquipediaProvider(options = {}) {
+export function createCs2Provider(options = {}) {
   const notificationDispatcher = options.notificationDispatcher ?? createNotificationDispatcher(options)
   const readMatches = options.loadMatches ?? loadMatches
+  const readPandaScoreMatches = options.loadPandaScoreMatches ?? loadPandaScoreMatches
+  // One provider serves many targets, so cache the same bounded API window briefly.
+  let pandaCache = { at: 0, credentialHash: '', matches: [] }
   const readTournamentPage = options.loadTournamentPage ?? (async (page) => {
     const data = await apiJson(`${API}?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&formatversion=2&titles=${encodeURIComponent(page)}`, 'query')
     return data?.query?.pages?.[0]?.revisions?.[0]?.slots?.main?.content ?? ''
@@ -525,16 +545,32 @@ export function createLiquipediaProvider(options = {}) {
     }
     return content
   }
-  return async ({ feature, settings, target, now, forceResend = false, noticeMode: requestedNoticeMode, eligibleAt }) => {
+  return async ({ feature, settings, target, ctx, now, manual = false, forceResend = false, noticeMode: requestedNoticeMode, eligibleAt }) => {
     const sourceId = feature.source?.id ?? 'none'
+    const sourceCapability = cs2SourceFor(sourceId)
     if (sourceId === 'none') return { matched: 0, sent: 0, error: '数据源尚未接入' }
-    if (sourceId !== 'liquipedia') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现，请选择 Liquipedia` }
+    if (sourceId !== 'liquipedia' && sourceId !== 'pandascore') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现` }
 
     const checkedAt = now()
-    const matches = parseCache.at !== 0 && checkedAt - parseCache.at < PARSE_CACHE_MS
-      ? parseCache.matches
-      : (await readMatches())
-    if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
+    let matches
+    if (sourceId === 'pandascore') {
+      // Resolve from the host vault on each run; the token never enters feature state.
+      const credentials = ctx?.get?.('credentials')
+      const hit = await credentials?.resolve?.(credentialRefFor('cs2-matches', 'pandascore'))
+      if (!hit?.value) return { matched: 0, sent: 0, error: 'PandaScore API Key 未配置' }
+      // A digest avoids retaining the token in the provider cache; manual runs always fetch fresh data.
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(hit.value))
+      const credentialHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+      if (!manual && pandaCache.credentialHash === credentialHash && pandaCache.at !== 0 && checkedAt - pandaCache.at < 5 * 60_000) matches = pandaCache.matches
+      else {
+        matches = await readPandaScoreMatches({ token: hit.value, nowMs: checkedAt })
+        pandaCache = { at: checkedAt, credentialHash, matches }
+      }
+    } else {
+      matches = parseCache.at !== 0 && checkedAt - parseCache.at < PARSE_CACHE_MS
+        ? parseCache.matches : await readMatches()
+      if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
+    }
 
     const noticeMode = requestedNoticeMode ?? feature.noticeMode ?? 'daily-digest'
     if (!['daily-digest', 'pre-match', 'result'].includes(noticeMode)) return { matched: 0, sent: 0, error: '通知规则已移除，请选择当前规则' }
@@ -542,15 +578,21 @@ export function createLiquipediaProvider(options = {}) {
     const dayKey = noticeMode === 'daily-digest' ? digestDayKey(checkedAt, timeZone, feature.digestDay) : ''
     const leadMinutes = Math.min(360, Math.max(15, Number(feature.leadMinutes) || 60))
     const watched = Array.isArray(feature.values?.teams) ? feature.values.teams : []
-    const wantedTiers = Array.isArray(feature.values?.tiers) ? feature.values.tiers : []
+    const wantedTiers = Array.isArray(feature.values?.tiers)
+      ? feature.values.tiers.filter((tier) => sourceId === 'pandascore' || tier !== 'D') : []
     const wantedValveTiers = Array.isArray(feature.values?.valveTiers) ? feature.values.valveTiers : []
+    // A channel with Valve Tier uses only Valve filters; legacy Liquipedia settings keep their old union.
+    const activeSourceTiers = sourceCapability?.hasValveTier && feature.tierMode === 'channel' ? [] : wantedTiers
+    const activeValveTiers = sourceCapability?.hasValveTier ? wantedValveTiers : []
+    // Keep PandaScore IDs separate without invalidating existing Liquipedia dedup keys.
+    const seenKey = (key) => sourceId === 'pandascore' ? `pandascore:${key}` : key
     pruneSeen(feature, checkedAt)
     const candidates = matches.filter((match) => {
       const at = match.timestamp * 1000
       if (!matchesTeams(watched, match)) return false
       if (noticeMode === 'daily-digest') return calendarDayKey(at, timeZone) === dayKey
       if (noticeMode === 'pre-match') {
-        const trackedAt = feature.seen[`schedule:${noticeIdentity(match)}`]
+        const trackedAt = feature.seen[seenKey(`schedule:${noticeIdentity(match)}`)]
         return (at > checkedAt && at <= checkedAt + leadMinutes * 60_000) ||
           (Number.isFinite(trackedAt) && trackedAt !== at && match.finished !== true &&
             at > checkedAt - 6 * 60 * 60_000 && at <= checkedAt + 48 * 60 * 60_000)
@@ -564,24 +606,27 @@ export function createLiquipediaProvider(options = {}) {
     const tiers = new Map()
     const valveTiers = new Map()
     let selected = candidates
-    if (wantedTiers.length > 0 || wantedValveTiers.length > 0) {
+    if (sourceId === 'pandascore') {
+      selected = candidates.filter((match) =>
+        wantedTiers.length === 0 || wantedTiers.includes(match.sourceTier))
+    } else if (activeSourceTiers.length > 0 || activeValveTiers.length > 0) {
       for (const page of new Set(candidates.map((match) => match.tournamentPage))) {
-        if (wantedTiers.length > 0) {
+        if (activeSourceTiers.length > 0) {
           const classification = await tournamentTiers(feature, page, readTournamentPage, false)
           tiers.set(page, classification.liquipedia)
         }
-        if (wantedValveTiers.length > 0 && !wantedTiers.includes(tiers.get(page))) {
+        if (activeValveTiers.length > 0 && !activeSourceTiers.includes(tiers.get(page))) {
           const classification = await tournamentTiers(feature, page, readTournamentPage, true)
           valveTiers.set(page, classification.valve)
         }
       }
       selected = candidates.filter((match) =>
-        wantedTiers.includes(tiers.get(match.tournamentPage) ?? 'M') ||
-        wantedValveTiers.includes(valveTiers.get(match.tournamentPage) ?? ''))
+        activeSourceTiers.includes(tiers.get(match.tournamentPage) ?? 'M') ||
+        activeValveTiers.includes(valveTiers.get(match.tournamentPage) ?? ''))
     }
 
-    const displayTiers = new Map()
-    for (const page of new Set(selected.map((match) => match.tournamentPage).filter(Boolean))) {
+    const displayTiers = sourceId === 'pandascore' ? new Map(selected.map((match) => [match.tournamentPage, match.sourceTier])) : new Map()
+    for (const page of sourceId === 'pandascore' ? [] : new Set(selected.map((match) => match.tournamentPage).filter(Boolean))) {
       let valve = valveTiers.get(page) ?? feature.tierCache?.[page]?.valve ?? ''
       if (!valve && (options.loadTournamentPage !== undefined || options.loadMatches === undefined)) {
         try { valve = (await tournamentTiers(feature, page, readTournamentPage, true)).valve }
@@ -592,7 +637,7 @@ export function createLiquipediaProvider(options = {}) {
 
     const changes = noticeMode === 'pre-match' && !forceResend
       ? selected.filter((match) => {
-        const previousAt = feature.seen[`schedule:${noticeIdentity(match)}`]
+        const previousAt = feature.seen[seenKey(`schedule:${noticeIdentity(match)}`)]
         return Number.isFinite(previousAt) && previousAt !== match.timestamp * 1000 && match.finished !== true
       }) : []
     const changingIds = new Set(changes.map(noticeIdentity))
@@ -601,13 +646,13 @@ export function createLiquipediaProvider(options = {}) {
         (match.timestamp * 1000 > checkedAt && match.timestamp * 1000 <= checkedAt + leadMinutes * 60_000 &&
           !changingIds.has(noticeIdentity(match))))
       .filter((match) => forceResend || (noticeMode === 'daily-digest'
-        ? feature.seen[`digest:${dayKey}`] === undefined && feature.seen[`digestmatch:${dayKey}:${match.id}`] === undefined
-        : feature.seen[`${noticeMode === 'pre-match' ? 'pre' : 'result'}:${noticeIdentity(match)}`] === undefined &&
-          feature.seen[`${noticeMode === 'pre-match' ? 'pre' : 'result'}:${match.id}`] === undefined))
+        ? feature.seen[seenKey(`digest:${dayKey}`)] === undefined && feature.seen[seenKey(`digestmatch:${dayKey}:${match.id}`)] === undefined
+        : feature.seen[seenKey(`${noticeMode === 'pre-match' ? 'pre' : 'result'}:${noticeIdentity(match)}`)] === undefined &&
+          feature.seen[seenKey(`${noticeMode === 'pre-match' ? 'pre' : 'result'}:${match.id}`)] === undefined))
       .sort((left, right) => left.timestamp - right.timestamp)
 
     const recaps = []
-    if (noticeMode === 'result' && !forceResend) {
+    if (sourceId === 'liquipedia' && noticeMode === 'result' && !forceResend) {
       const roundGroups = new Map()
       for (const match of matches) {
         if (!match.tournamentPage || roundNumber(match) === 0) continue
@@ -654,11 +699,11 @@ export function createLiquipediaProvider(options = {}) {
       : composePreMatchSections(fresh, displayTiers, timeZone)
     const markSeen = (section) => {
       if (noticeMode === 'daily-digest') {
-        for (const match of section.matches) feature.seen[`digestmatch:${dayKey}:${match.id}`] = checkedAt
+        for (const match of section.matches) feature.seen[seenKey(`digestmatch:${dayKey}:${match.id}`)] = checkedAt
       }
-      else for (const match of section.matches) feature.seen[`${noticeMode === 'pre-match' ? 'pre' : 'result'}:${noticeIdentity(match)}`] = checkedAt
+      else for (const match of section.matches) feature.seen[seenKey(`${noticeMode === 'pre-match' ? 'pre' : 'result'}:${noticeIdentity(match)}`)] = checkedAt
       if (noticeMode !== 'result') for (const match of section.matches) {
-        feature.seen[`schedule:${noticeIdentity(match)}`] = match.timestamp * 1000
+        feature.seen[seenKey(`schedule:${noticeIdentity(match)}`)] = match.timestamp * 1000
       }
     }
     const modeTemplates = migrateCs2ModeTemplates(feature.serviceTemplate)
@@ -669,7 +714,7 @@ export function createLiquipediaProvider(options = {}) {
     let channel = 'service-turn'
     let submitted = 0
     for (const match of changes) {
-      const markdown = composeScheduleChange(match, feature.seen[`schedule:${noticeIdentity(match)}`],
+      const markdown = composeScheduleChange(match, feature.seen[seenKey(`schedule:${noticeIdentity(match)}`)],
         timeZone, displayTiers.get(match.tournamentPage), checkedAt)
       let outcome
       try {
@@ -682,8 +727,8 @@ export function createLiquipediaProvider(options = {}) {
         throw failure
       }
       channel = outcome.channel
-      feature.seen[`schedule:${noticeIdentity(match)}`] = match.timestamp * 1000
-      if (match.timestamp * 1000 <= checkedAt + leadMinutes * 60_000) feature.seen[`pre:${noticeIdentity(match)}`] = checkedAt
+      feature.seen[seenKey(`schedule:${noticeIdentity(match)}`)] = match.timestamp * 1000
+      if (match.timestamp * 1000 <= checkedAt + leadMinutes * 60_000) feature.seen[seenKey(`pre:${noticeIdentity(match)}`)] = checkedAt
       submitted++
     }
     for (const section of sections) {
@@ -724,11 +769,14 @@ export function createLiquipediaProvider(options = {}) {
       feature.seen[recap.seenKey] = checkedAt
       submitted++
     }
-    if (noticeMode === 'daily-digest') feature.seen[`digest:${dayKey}`] = checkedAt
+    if (noticeMode === 'daily-digest') feature.seen[seenKey(`digest:${dayKey}`)] = checkedAt
 
     return { matched: selected.length, sent: fresh.length + changes.length + recaps.length, channel }
   }
 }
+
+/** Backward-compatible export for existing integrations. */
+export const createLiquipediaProvider = createCs2Provider
 
 /** Load the ticker once per cache window; a throttled repeat answers from the cache. */
 async function loadMatches() {

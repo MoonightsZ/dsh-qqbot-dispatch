@@ -29,6 +29,7 @@
     "group-names.js",
     "group-health.js",
     "features.js",
+    "credential-ref.js",
     "cron.js",
     "qqbot-creds.js",
     "client.js",

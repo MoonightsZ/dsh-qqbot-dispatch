@@ -5,6 +5,7 @@ import { summarizeTargetResults } from '../../client/target-results.js'
 import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE } from './template.js'
 import { migrateCs2NoticeRules } from './rules.js'
 import { previewCs2FixedNotice } from './provider.js'
+import { cs2SourceFor } from './sources.js'
 
 export function createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section }) {
   const { useState } = React
@@ -144,8 +145,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [tiers, setTiers] = useState(Array.isArray(values.tiers) ? values.tiers : [])
   const [valveTiers, setValveTiers] = useState(Array.isArray(values.valveTiers) ? values.valveTiers : [])
   const [sessionIds, setSessionIds] = useState(feature.target?.sessionIds ?? [])
-  const [sourceId, setSourceId] = useState(feature.source?.id ?? 'custom')
-  const [baseUrl, setBaseUrl] = useState(feature.source?.baseUrl ?? '')
+  const [sourceId, setSourceId] = useState(feature.source?.id ?? 'liquipedia')
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
   const [noticeRules, setNoticeRules] = useState(migrateCs2NoticeRules(feature, 'daily-digest'))
@@ -183,13 +183,16 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     digestTemplate,
     preMatchTemplate,
     resultTemplate,
+    // Keep an old source-only filter until a Valve selection or deliberate clearing can replace it.
+    tierMode: sourceId === 'liquipedia' && feature.tierMode !== 'channel' && tiers.length > 0 && valveTiers.length === 0
+      ? 'legacy' : 'channel',
     noticeMode: feature.noticeMode ?? 'daily-digest',
     noticeRules,
     digestDay,
     leadMinutes: Number(leadMinutesText) || 60,
     scheduleMode: feature.scheduleMode,
     cron: splitCronRules(feature.cron),
-    source: { id: sourceId, baseUrl: baseUrl.trim() },
+    source: { id: sourceId, baseUrl: '' },
     ...(apiKey.trim() === '' ? {} : { credential: apiKey.trim() }),
     ...(clearKey ? { clearCredential: true } : {}),
     intervalMinutes: feature.intervalMinutes ?? 60,
@@ -256,7 +259,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   }
 
   const status = featureStatus(feature)
-  const tierOptions = feature.fields?.find((field) => field.key === 'tiers')?.options ?? []
+  const tierOptions = sourceId === 'pandascore' ? ['S', 'A', 'B', 'C', 'D']
+    : (feature.fields?.find((field) => field.key === 'tiers')?.options ?? []).filter((tier) => tier !== 'D')
   const valveTierOptions = feature.fields?.find((field) => field.key === 'valveTiers')?.options ?? []
   const targetOptions = featureTargetOptions(sessions, sessionIds, settings?.defaultTargetSessionIds ?? [])
 
@@ -281,9 +285,16 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const defaultTemplate = noticeMode === 'daily-digest' ? DEFAULT_CS2_DIGEST_TEMPLATE : noticeMode === 'pre-match' ? DEFAULT_CS2_PRE_MATCH_TEMPLATE : DEFAULT_CS2_RESULT_TEMPLATE
   const templateName = noticeMode === 'daily-digest' ? '每日汇总' : noticeMode === 'pre-match' ? '赛前提醒' : '赛果提醒'
   const templateHelp = noticeMode === 'daily-digest'
-    ? '占位符：{{title}}、{{schedule}}、{{focusAnalysis}}、{{sourceUrl}}。保留按赛事分组的赛程、赛事看点与 Liquipedia 来源。'
+    ? '占位符：{{title}}、{{schedule}}、{{focusAnalysis}}、{{sourceUrl}}。保留按赛事分组的赛程、赛事看点与数据来源。'
     : noticeMode === 'result' ? '占位符：{{tournament}}、{{tier}}、{{results}}、{{focusAnalysis}}、{{sourceUrl}}。只依据已确认比分分析，不补造地图或胜负原因。'
-    : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与 Liquipedia 来源。'
+    : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与数据来源。'
+  const credentialCurrent = sourceId === feature.source?.id
+  const credentialConfigured = credentialCurrent && feature.credential?.configured === true
+  const sourceCapability = (feature.sources ?? []).find((item) => item.id === sourceId)
+  const hasValveTier = sourceCapability?.hasValveTier ?? cs2SourceFor(sourceId)?.hasValveTier ?? false
+  const requiresCredential = sourceCapability?.requiresCredential ?? cs2SourceFor(sourceId)?.requiresCredential ?? false
+  // Show the old Liquipedia tier filter while the saved config still uses the union rule.
+  const legacyTierMode = feature.tierMode !== 'channel' && hasValveTier
   const contentLocked = settings?.deliveryMethod === 'upstream-sdk'
   const previewLine = (line, index) => {
     const text = line.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
@@ -297,7 +308,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     h('span', { style: styles.label }, `${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'} · 发送内容示例`),
     h('div', { style: { padding: 12, border: `1px solid ${C.border}`, borderRadius: 8,
       background: C.layer2, color: C.primary, overflowWrap: 'anywhere', fontSize: 12, lineHeight: 1.6 } },
-    ...previewCs2FixedNotice(mode, feature.timeZone ?? 'Asia/Shanghai').split('\n').map(previewLine)),
+    ...previewCs2FixedNotice(mode, feature.timeZone ?? 'Asia/Shanghai', sourceId).split('\n').map(previewLine)),
   )
   const rulePanel = (mode, title, description) => {
     const rule = noticeRules[mode]
@@ -437,34 +448,41 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     open ? h('div', null,
     h('p', { style: styles.desc }, feature.description),
 
-    configSection('01', '数据源', '选择赛事来源并管理访问凭证。', h('div', { style: styles.sourceBlock },
-      h('div', { style: styles.sourceHead },
+    configSection('01', '数据源', requiresCredential ? '选择赛事来源并配置 PandaScore API Key。' : '选择赛事来源。', h('div', { style: styles.sourceBlock },
+      sourceId === 'liquipedia' || sourceId === 'pandascore'
+        ? h('span', { style: styles.desc }, hasValveTier ? '此渠道提供 Valve Tier；按 Valve Tier 筛选。' : '此渠道不提供 Valve Tier；按渠道自身 Tier 筛选。') : null,
+      requiresCredential ? h('div', { style: styles.sourceHead },
         h('span', { style: styles.label }, '凭证状态'),
-        h('span', { style: feature.credential?.configured ? styles.chipOk : styles.chipWarn },
-          feature.credential?.configured ? 'API Key 已配置' : 'API Key 未配置'),
-        h('span', { style: styles.monoHint }, feature.credential?.ref ?? ''),
-      ),
+        h('span', { style: credentialConfigured ? styles.chipOk : styles.chipWarn },
+          credentialConfigured ? 'API Key 已配置' : credentialCurrent ? 'API Key 未配置' : '切换渠道后保存以查看状态'),
+        h('span', { style: styles.monoHint }, credentialCurrent ? feature.credential?.ref ?? '' : ''),
+      ) : null,
       h('div', { style: styles.grid },
         h('div', { style: styles.field },
           h('span', { style: styles.label }, '数据源类型'),
           h('select', {
             style: styles.select,
             value: sourceId,
-            onChange: (event) => setSourceId(event.target.value),
+            onChange: (event) => {
+              setSourceId(event.target.value)
+              if (event.target.value === 'liquipedia') setTiers((current) => current.filter((tier) => tier !== 'D'))
+              setApiKey('')
+              setClearKey(false)
+            },
           }, (feature.sources ?? []).map((item) => h('option', { key: item.id, value: item.id }, item.label))),
         ),
-        h('div', { style: styles.field },
+        requiresCredential ? h('div', { style: styles.field },
           h('span', { style: styles.label }, 'API Key（只写，不回显）'),
           h('div', { style: styles.keyRow },
             h('input', {
               style: styles.input,
               type: 'password',
               value: apiKey,
-              placeholder: feature.credential?.configured ? '已配置，留空则不修改' : '粘贴 API Key',
+              placeholder: credentialConfigured ? '已配置，留空则不修改' : '粘贴 API Key',
               autoComplete: 'off',
               onChange: (event) => setApiKey(event.target.value),
             }),
-            feature.credential?.configured === true
+            credentialConfigured
               ? h('button', {
                 type: 'button',
                 style: styles.ghostButton,
@@ -473,23 +491,7 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
               : null,
           ),
           clearKey ? h('span', { style: { color: C.warn, fontSize: 11 } }, '保存后会删除已存凭证') : null,
-        ),
-      ),
-      h('details', { style: styles.details },
-        h('summary', { style: styles.summary },
-          h('span', { className: 'qqd-chev' }, '▸'),
-          h('span', null, '接口地址（可选）'),
-          baseUrl.trim() === '' ? null : h('span', { style: styles.summaryValue }, baseUrl.trim()),
-        ),
-        h('div', { style: styles.detailsBody },
-          h('input', {
-            style: styles.input,
-            value: baseUrl,
-            placeholder: 'https://…',
-            disabled: sourceId === 'none',
-            onChange: (event) => setBaseUrl(event.target.value),
-          }),
-        ),
+        ) : null,
       ),
     )),
     configSection('02', '通知目标与赛事', '选择接收通知的会话，并设置赛事筛选条件。', h('div', { style: styles.grid },
@@ -510,18 +512,20 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
           onDraft: setTeamDraft,
         }),
       ),
-      h('div', { style: styles.field },
-        h('span', { style: styles.label }, 'Liquipedia Tier'),
+      sourceId === 'pandascore' || legacyTierMode ? h('div', { style: styles.field },
+        h('span', { style: styles.label }, sourceId === 'pandascore' ? 'PandaScore Tier' : 'Liquipedia Tier（旧配置）'),
         h(TierRange, { options: tierOptions, tiers, onChange: setTiers }),
-      ),
-      h('div', { style: styles.field },
+      ) : null,
+      !hasValveTier ? sourceId === 'pandascore' ? h('span', { style: styles.desc }, 'PandaScore Tier 由 PandaScore 自行评定，不代表 Valve Tier。') : null : h('div', { style: styles.field },
         h('span', { style: styles.label }, 'Valve Tier'),
         h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px 14px' } },
           ...valveTierOptions.map((option) => h('label', { key: option, style: { display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' } },
             h('input', { type: 'checkbox', checked: valveTiers.includes(option), onChange: (event) => setValveTiers((current) =>
               event.target.checked ? [...current, option] : current.filter((item) => item !== option)) }),
             option))),
-        h('span', { style: styles.desc }, '可多选；两组条件任一符合即可，均留空表示全部。'),
+        h('span', { style: styles.desc }, legacyTierMode
+          ? '旧配置仍按 Liquipedia Tier 或 Valve Tier 任一匹配；选择 Valve Tier 后保存，或清空旧 Liquipedia Tier 后保存，即改为只按 Valve Tier 筛选。'
+          : '可多选；留空表示全部。无法确认 Valve Tier 的赛事不会匹配已选等级。'),
       ),
     )),
     configSection('03', '通知规则', '每日汇总、赛前提醒与赛果提醒可独立启用；同一场比赛可依次收到三种通知。',

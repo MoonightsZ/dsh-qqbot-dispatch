@@ -55,7 +55,7 @@ function validateTemplate(input, fallback, required) {
   for (const placeholder of required) {
     if (!template.includes(placeholder)) throw new Error(`Markdown 模板缺少 ${placeholder} 占位符`)
   }
-  if (!/liquipedia/i.test(template)) throw new Error('Markdown 模板必须标注 Liquipedia 数据来源')
+  if (!/liquipedia|pandascore|\{\{sourceName\}\}/i.test(template)) throw new Error('Markdown 模板必须标注数据来源')
   return template
 }
 
@@ -92,16 +92,23 @@ export function migrateCs2ModeTemplates(oldTemplate) {
 
 export function composeCs2ServiceTurnPrompt(section, template, focus, mode = 'daily-digest') {
   const sourceUrl = section.sourceUrl ?? 'https://liquipedia.net/counterstrike'
+  const sourceName = section.sourceName ?? 'Liquipedia'
+  const sourceLicense = section.sourceLicense ?? ' · CC BY-SA 3.0'
   const selectedTemplate = mode === 'daily-digest' ? validateCs2DigestTemplate(template)
     : mode === 'pre-match' ? validateCs2PreMatchTemplate(template)
       : validateCs2ResultTemplate(template)
+  // Saved templates may contain a literal Liquipedia credit; render attribution for the active channel.
   const markdown = selectedTemplate
+    .replace(/\b(?:Liquipedia|PandaScore)\b/gi, sourceName)
+    .replace(/ · CC BY-SA 3\.0/g, sourceLicense === '' ? '' : ' · CC BY-SA 3.0')
     .replaceAll('{{title}}', section.title)
     .replaceAll('{{tournament}}', section.title)
-    .replaceAll('{{tier}}', `Valve Tier：${section.tier && section.tier !== 'M' ? section.tier : '未確認'}`)
+    .replaceAll('{{tier}}', `${sourceName === 'PandaScore' ? 'PandaScore Tier' : 'Valve Tier'}：${section.tier && section.tier !== 'M' ? section.tier : '未確認'}`)
     .replaceAll('{{schedule}}', section.scheduleMarkdown ?? section.matchupsMarkdown)
     .replaceAll('{{matchups}}', section.matchupsMarkdown)
     .replaceAll('{{results}}', section.resultsMarkdown ?? '')
+    .replaceAll('{{sourceName}}', sourceName)
+    .replaceAll('{{sourceLicense}}', sourceLicense)
     .replaceAll('{{sourceUrl}}', sourceUrl)
   const focusName = focus === undefined ? '无可用焦点对局' : `${focus.teamA} ⚔ ${focus.teamB}`
   const focusInstruction = mode === 'daily-digest'

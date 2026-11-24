@@ -3,10 +3,10 @@ export const definition = {
   label: 'CS2 赛事通知',
   description: '按关注队伍与赛事等级筛选比赛，独立设置每日汇总、赛前提醒和赛果提醒，并按全局配置投递通知。',
   provider: null,
-  providerLabel: '未接入',
+  providerLabel: 'Liquipedia',
   fields: [
     { key: 'teams', label: '关注队伍', kind: 'list', placeholder: '例如 Spirit, Vitality', hint: '留空表示全部队伍' },
-    { key: 'tiers', label: 'Liquipedia Tier', kind: 'options', options: ['S', 'A', 'B', 'C'], hint: '留空表示全部等级' },
+    { key: 'tiers', label: '来源 Tier', kind: 'options', options: ['S', 'A', 'B', 'C', 'D'], hint: '留空表示全部等级' },
     { key: 'valveTiers', label: 'Valve Tier', kind: 'options', options: ['Major', 'Tier 1', 'Tier 2', 'Wildcard'], hint: '留空表示全部等级' },
   ],
 }
