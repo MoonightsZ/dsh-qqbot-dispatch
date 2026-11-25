@@ -264,10 +264,11 @@ export function configFromInput(entry, input) {
 }
 
 /** Project one feature's state for the page; the credential never carries a value. */
-function publicFeature(entry, feature, statePath, credential) {
+function publicFeature(entry, feature, statePath, credential, credentialStatuses) {
   const source = feature.source ?? { id: 'none', baseUrl: '' }
   const provider = source.id === 'none' ? null : source.id
-  const sourceLabel = entry.provider === 'builtin' ? '内置' : SOURCES.find((item) => item.id === source.id)?.label ?? '未接入'
+  const sourceLabel = entry.provider === 'builtin' ? '内置'
+    : (entry.id === 'cs2-matches' ? CS2_SOURCES : SOURCES).find((item) => item.id === source.id)?.label ?? '未接入'
   return {
     id: entry.id,
     label: entry.label,
@@ -277,6 +278,7 @@ function publicFeature(entry, feature, statePath, credential) {
     sources: entry.id === 'cs2-matches' ? CS2_SOURCES : SOURCES,
     source,
     credential,
+    ...(entry.id === 'cs2-matches' ? { credentialStatuses } : {}),
     fields: entry.fields,
     extension: entry.extension === true,
     enabled: feature.enabled === true,
@@ -352,12 +354,22 @@ export function createFeatureRuntime(options) {
     }
   }
 
+  async function publicFeatureWithCredentials(entry, feature) {
+    if (entry.id !== 'cs2-matches') {
+      return publicFeature(entry, feature, statePath, await credentialStatus(entry.id, feature.source?.id))
+    }
+    // Only status and references are exposed; each source retains its own value in the host vault.
+    const statuses = Object.fromEntries(await Promise.all(CS2_SOURCES.map(async ({ id }) =>
+      [id, await credentialStatus(entry.id, id)])))
+    return publicFeature(entry, feature, statePath, statuses[feature.source?.id] ?? statuses.liquipedia, statuses)
+  }
+
   async function snapshot() {
     const state = read()
     const features = []
     for (const entry of entries) {
       const feature = state.features[entry.id] ?? defaultFeature(entry)
-      features.push(publicFeature(entry, feature, statePath, await credentialStatus(entry.id, feature.source?.id)))
+      features.push(await publicFeatureWithCredentials(entry, feature))
     }
     return { features, settings: state.settings }
   }
@@ -420,7 +432,7 @@ export function createFeatureRuntime(options) {
     }
     state.features[id] = feature
     writeStateFile(statePath, state)
-    return publicFeature(entry, feature, statePath, await credentialStatus(id, feature.source?.id))
+    return publicFeatureWithCredentials(entry, feature)
   }
 
   /** A provider may later fill this in; until then a run only records the gap. */

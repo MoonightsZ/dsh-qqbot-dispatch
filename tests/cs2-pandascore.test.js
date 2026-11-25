@@ -165,6 +165,34 @@ test('PandaScore 凭证写入独立宿主引用，不进入功能状态文件', 
   assert.doesNotMatch(readFileSync(path, 'utf8'), /secret-test-token/)
 })
 
+test('切换渠道保留各自 API Key，仅明确清除当前渠道的 Key', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'qqbot-source-keys-')), 'features.json')
+  const secrets = new Map()
+  const credentials = {
+    set: async (ref, value) => secrets.set(ref, value),
+    unset: async (ref) => secrets.delete(ref),
+    describe: async (ref) => ({ configured: secrets.has(ref), writable: true }),
+  }
+  const runtime = createFeatureRuntime({ statePath: path, ctx: { get: () => credentials } })
+  const getCs2 = async () => (await runtime.snapshot()).features.find((feature) => feature.id === 'cs2-matches')
+  const liquipediaRef = credentialRefFor('cs2-matches', 'liquipedia')
+  const pandascoreRef = credentialRefFor('cs2-matches', 'pandascore')
+  await runtime.save('cs2-matches', { ...await getCs2(), source: { id: 'liquipedia' }, credential: 'liquipedia-key' })
+  await runtime.save('cs2-matches', { ...await getCs2(), source: { id: 'pandascore' }, credential: 'pandascore-key' })
+  const panda = await getCs2()
+  assert.equal(panda.providerLabel, 'PandaScore')
+  assert.equal(panda.credentialStatuses.liquipedia.configured, true)
+  assert.equal(panda.credentialStatuses.pandascore.configured, true)
+  await runtime.save('cs2-matches', { ...panda, source: { id: 'liquipedia' } })
+  assert.equal((await getCs2()).credential.configured, true)
+  assert.equal(secrets.get(liquipediaRef), 'liquipedia-key')
+  assert.equal(secrets.get(pandascoreRef), 'pandascore-key')
+  await runtime.save('cs2-matches', { ...await getCs2(), source: { id: 'pandascore' }, clearCredential: true })
+  assert.equal(secrets.has(pandascoreRef), false)
+  assert.equal(secrets.get(liquipediaRef), 'liquipedia-key')
+  assert.doesNotMatch(readFileSync(path, 'utf8'), /liquipedia-key|pandascore-key/)
+})
+
 test('旧 Liquipedia 状态保留旧等级语义，新状态使用渠道等级', async () => {
   const path = join(mkdtempSync(join(tmpdir(), 'qqbot-tier-')), 'features.json')
   const ctx = { get: () => undefined }

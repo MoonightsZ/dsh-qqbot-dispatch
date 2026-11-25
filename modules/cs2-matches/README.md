@@ -10,7 +10,7 @@
 
 渠道标记决定生效的等级类型：Liquipedia 提供 Valve Tier，使用 Major、Tier 1、Tier 2、Wildcard；PandaScore 不提供 Valve Tier，使用它自行评定的 S/A/B/C/D。两套等级不能互相换算。Liquipedia 的 Valve 等级从赛事页面读取，分阶段页面未标注时读取主赛事页面；仍无法确认等级的赛事不会匹配已选的 Valve Tier。升级前保存的 Liquipedia 配置继续按旧规则（Liquipedia Tier 或 Valve Tier 任一匹配）运行；若只有 Liquipedia Tier 筛选，保存时仍保留旧规则，直到选择 Valve Tier 或主动清空旧等级。完成后只按 Valve Tier 筛选。
 
-PandaScore API Key 在选择该渠道后填入数据源区域，使用独立的宿主凭证引用 `QQBOT_DISPATCH_CS2_MATCHES_PANDASCORE_API_KEY`，不会写入功能状态文件或回显。Liquipedia 原有凭证引用保持不变。PandaScore 请求使用服务端 Bearer 认证；其 CS2 接口沿用 `/csgo/` 路径。渠道切换后，已通知记录按来源区分；PandaScore 的来源 Tier 不会启用 Liquipedia 的 Valve Tier 设置。
+PandaScore API Key 在选择该渠道后填入数据源区域，使用独立的宿主凭证引用 `QQBOT_DISPATCH_CS2_MATCHES_PANDASCORE_API_KEY`，不会写入功能状态文件或回显。Liquipedia 原有凭证引用保持不变。切换渠道只切换当前使用的凭证，不会删除另一渠道的 Key；切换回来时可直接看到该渠道是否已配置，只有点击「清除」并保存才会删除当前渠道的 Key。PandaScore 请求使用服务端 Bearer 认证；其 CS2 接口沿用 `/csgo/` 路径。渠道切换后，已通知记录按来源区分；PandaScore 的来源 Tier 不会启用 Liquipedia 的 Valve Tier 设置。
 
 每条规则按目标顺序处理。已通知记录按目标分别保存；一个目标失败时其余目标继续，之后「立即检查」仅补发尚未成功的通知。「立即发送」会对当前目标组逐个重发。结果中的「已提交服务回合」或「已调用上游发送」不代表 QQ 客户端已送达。
 

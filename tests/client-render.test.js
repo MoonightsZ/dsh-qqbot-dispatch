@@ -243,6 +243,40 @@ test('CS2 渠道能力控制显示的 Tier 设置', () => {
   assert.doesNotMatch(liquipedia, /Liquipedia Tier（旧配置）/)
 })
 
+test('切回 PandaScore 前即可显示原渠道已保存的 API Key 状态', () => {
+  const state = []
+  let cursor = 0
+  const StatefulReact = { useState: (initial) => {
+    const index = cursor++
+    if (!(index in state)) state[index] = initial
+    return [state[index], (next) => { state[index] = typeof next === 'function' ? next(state[index]) : next }]
+  } }
+  const FeatureCard = createFeatureCard({ React: StatefulReact, h, C, styles, ...common,
+    FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
+  const feature = { id: 'cs2-matches', label: 'CS2 赛事通知', enabled: false, tierMode: 'channel',
+    source: { id: 'liquipedia' }, target: { sessionIds: [] }, values: { teams: [], tiers: [], valveTiers: [] },
+    fields: [{ key: 'tiers', options: ['S', 'A', 'B', 'C'] }, { key: 'valveTiers', options: ['Major'] }],
+    sources: [{ id: 'liquipedia', label: 'Liquipedia', hasValveTier: true },
+      { id: 'pandascore', label: 'PandaScore', hasValveTier: false, requiresCredential: true }],
+    credential: { configured: false }, credentialStatuses: {
+      liquipedia: { configured: false, ref: 'LIQUIPEDIA_REF' },
+      pandascore: { configured: true, ref: 'PANDASCORE_REF' },
+    } }
+  const render = () => { cursor = 0; return FeatureCard({ feature, settings: {}, sessions: [], open: true,
+    onToggle: () => {}, onSaved: () => {}, onRun: () => {}, onNotice: () => {} }) }
+  const findSourceSelect = (node) => {
+    if (Array.isArray(node)) return node.map(findSourceSelect).find(Boolean)
+    if (!node || typeof node !== 'object') return null
+    if (node.type === 'select' && node.props?.value === 'liquipedia') return node
+    return node.children?.map(findSourceSelect).find(Boolean)
+  }
+  findSourceSelect(render()).props.onChange({ target: { value: 'pandascore' } })
+  const switched = JSON.stringify(render())
+  assert.match(switched, /API Key 已配置/)
+  assert.match(switched, /PANDASCORE_REF/)
+  assert.doesNotMatch(switched, /切换渠道后保存以查看状态/)
+})
+
 test('Valve Tier 多选项与 Liquipedia Tier 分别保存', async () => {
   const state = []
   let cursor = 0

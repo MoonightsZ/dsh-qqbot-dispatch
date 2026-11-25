@@ -289,7 +289,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     : noticeMode === 'result' ? '占位符：{{tournament}}、{{tier}}、{{results}}、{{focusAnalysis}}、{{sourceUrl}}。只依据已确认比分分析，不补造地图或胜负原因。'
     : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与数据来源。'
   const credentialCurrent = sourceId === feature.source?.id
-  const credentialConfigured = credentialCurrent && feature.credential?.configured === true
+  const sourceCredential = feature.credentialStatuses?.[sourceId] ?? (credentialCurrent ? feature.credential : undefined)
+  const credentialConfigured = sourceCredential?.configured === true
   const sourceCapability = (feature.sources ?? []).find((item) => item.id === sourceId)
   const hasValveTier = sourceCapability?.hasValveTier ?? cs2SourceFor(sourceId)?.hasValveTier ?? false
   const requiresCredential = sourceCapability?.requiresCredential ?? cs2SourceFor(sourceId)?.requiresCredential ?? false
@@ -454,8 +455,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
       requiresCredential ? h('div', { style: styles.sourceHead },
         h('span', { style: styles.label }, '凭证状态'),
         h('span', { style: credentialConfigured ? styles.chipOk : styles.chipWarn },
-          credentialConfigured ? 'API Key 已配置' : credentialCurrent ? 'API Key 未配置' : '切换渠道后保存以查看状态'),
-        h('span', { style: styles.monoHint }, credentialCurrent ? feature.credential?.ref ?? '' : ''),
+          credentialConfigured ? 'API Key 已配置' : sourceCredential ? 'API Key 未配置' : '保存后查看凭证状态'),
+        h('span', { style: styles.monoHint }, sourceCredential?.ref ?? ''),
       ) : null,
       h('div', { style: styles.grid },
         h('div', { style: styles.field },
