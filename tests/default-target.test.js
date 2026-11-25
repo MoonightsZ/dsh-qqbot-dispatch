@@ -23,7 +23,7 @@ test('全局默认目标用于未覆盖的模组，已有独立目标保持不�
   runtime.saveSettings({ defaultTargetSessionIds: ['shared-group'] })
   const restored = runtimeAt(path)
   const snapshot = await restored.snapshot()
-  assert.deepEqual(snapshot.settings, { deliveryMethod: 'service-turn', defaultTargetSessionIds: ['shared-group'] })
+  assert.deepEqual(snapshot.settings, { deliveryMethod: 'service-turn', defaultTargetSessionIds: ['shared-group'], requestTimeoutSeconds: 30 })
   assert.deepEqual(snapshot.features.find((item) => item.id === 'cs2-matches').target.sessionIds, ['cs2-old'])
   assert.deepEqual(snapshot.features.find((item) => item.id === 'casual-chat').target.sessionIds, [])
 
@@ -41,7 +41,7 @@ test('全局投递方式和默认目标可独立更新，清空后继承模组�
   const runtime = runtimeAt(path)
   runtime.saveSettings({ defaultTargetSessionIds: ['shared-group'] })
   runtime.saveSettings({ deliveryMethod: 'upstream-sdk' })
-  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'upstream-sdk', defaultTargetSessionIds: ['shared-group'] })
+  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'upstream-sdk', defaultTargetSessionIds: ['shared-group'], requestTimeoutSeconds: 30 })
   runtime.saveSettings({ defaultTargetSessionIds: [] })
   let called = false
   runtime.registerProvider('casual-chat', async () => { called = true; return { matched: 1, sent: 1 } })

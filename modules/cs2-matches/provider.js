@@ -18,6 +18,7 @@ import { createNotificationDispatcher } from '../../notification-dispatcher.js'
 import { credentialRefFor } from '../../credential-ref.js'
 import { loadPandaScoreMatches } from './pandascore.js'
 import { cs2SourceFor } from './sources.js'
+import { requestTimeoutMs } from './request-timeout.js'
 
 const API = 'https://liquipedia.net/counterstrike/api.php'
 const USER_AGENT = 'dsh-qqbot-dispatch/0.1 (DSH QQ bot plugin; +https://github.com/deepseek-ai/dsh)'
@@ -49,10 +50,11 @@ async function throttle(kind) {
   lastRequestAt = started
 }
 
-async function apiJson(url, kind) {
+async function apiJson(url, kind, timeoutMs) {
   await throttle(kind)
   const response = await fetch(url, {
     headers: { 'user-agent': USER_AGENT, accept: 'application/json', 'accept-encoding': 'gzip' },
+    signal: AbortSignal.timeout(timeoutMs),
   })
   if (!response.ok) throw new Error(`Liquipedia HTTP ${response.status}`)
   return response.json()
@@ -528,16 +530,16 @@ export function createCs2Provider(options = {}) {
   const readPandaScoreMatches = options.loadPandaScoreMatches ?? loadPandaScoreMatches
   // One provider serves many targets, so cache the same bounded API window briefly.
   let pandaCache = { at: 0, credentialHash: '', matches: [] }
-  const readTournamentPage = options.loadTournamentPage ?? (async (page) => {
-    const data = await apiJson(`${API}?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&formatversion=2&titles=${encodeURIComponent(page)}`, 'query')
+  const readTournamentPage = options.loadTournamentPage ?? (async (page, timeoutMs) => {
+    const data = await apiJson(`${API}?action=query&prop=revisions&rvslots=main&rvprop=content&format=json&formatversion=2&titles=${encodeURIComponent(page)}`, 'query', timeoutMs)
     return data?.query?.pages?.[0]?.revisions?.[0]?.slots?.main?.content ?? ''
   })
   const roundPageCache = new Map()
-  async function readRoundPage(page, checkedAt) {
-    if (options.loadTournamentPage !== undefined) return readTournamentPage(page)
+  async function readRoundPage(page, checkedAt, timeoutMs) {
+    if (options.loadTournamentPage !== undefined) return readTournamentPage(page, timeoutMs)
     const cached = roundPageCache.get(page)
     if (cached && checkedAt - cached.at < PARSE_CACHE_MS) return cached.content
-    const content = await readTournamentPage(page)
+    const content = await readTournamentPage(page, timeoutMs)
     if (content) {
       roundPageCache.delete(page)
       roundPageCache.set(page, { at: checkedAt, content })
@@ -552,6 +554,8 @@ export function createCs2Provider(options = {}) {
     if (sourceId !== 'liquipedia' && sourceId !== 'pandascore') return { matched: 0, sent: 0, error: `数据源 ${sourceId} 尚未实现` }
 
     const checkedAt = now()
+    const timeoutMs = requestTimeoutMs(settings)
+    const readPage = (page) => readTournamentPage(page, timeoutMs)
     let matches
     if (sourceId === 'pandascore') {
       // Resolve from the host vault on each run; the token never enters feature state.
@@ -563,12 +567,12 @@ export function createCs2Provider(options = {}) {
       const credentialHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
       if (!manual && pandaCache.credentialHash === credentialHash && pandaCache.at !== 0 && checkedAt - pandaCache.at < 5 * 60_000) matches = pandaCache.matches
       else {
-        matches = await readPandaScoreMatches({ token: hit.value, nowMs: checkedAt })
+        matches = await readPandaScoreMatches({ token: hit.value, nowMs: checkedAt, timeoutMs })
         pandaCache = { at: checkedAt, credentialHash, matches }
       }
     } else {
       matches = parseCache.at !== 0 && checkedAt - parseCache.at < PARSE_CACHE_MS
-        ? parseCache.matches : await readMatches()
+        ? parseCache.matches : await readMatches(timeoutMs)
       if (matches === undefined) return { matched: 0, sent: 0, error: 'Liquipedia 请求过于频繁，稍后再试' }
     }
 
@@ -612,11 +616,11 @@ export function createCs2Provider(options = {}) {
     } else if (activeSourceTiers.length > 0 || activeValveTiers.length > 0) {
       for (const page of new Set(candidates.map((match) => match.tournamentPage))) {
         if (activeSourceTiers.length > 0) {
-          const classification = await tournamentTiers(feature, page, readTournamentPage, false)
+          const classification = await tournamentTiers(feature, page, readPage, false)
           tiers.set(page, classification.liquipedia)
         }
         if (activeValveTiers.length > 0 && !activeSourceTiers.includes(tiers.get(page))) {
-          const classification = await tournamentTiers(feature, page, readTournamentPage, true)
+          const classification = await tournamentTiers(feature, page, readPage, true)
           valveTiers.set(page, classification.valve)
         }
       }
@@ -629,7 +633,7 @@ export function createCs2Provider(options = {}) {
     for (const page of sourceId === 'pandascore' ? [] : new Set(selected.map((match) => match.tournamentPage).filter(Boolean))) {
       let valve = valveTiers.get(page) ?? feature.tierCache?.[page]?.valve ?? ''
       if (!valve && (options.loadTournamentPage !== undefined || options.loadMatches === undefined)) {
-        try { valve = (await tournamentTiers(feature, page, readTournamentPage, true)).valve }
+        try { valve = (await tournamentTiers(feature, page, readPage, true)).valve }
         catch { valve = '' }
       }
       displayTiers.set(page, valve)
@@ -676,7 +680,7 @@ export function createCs2Provider(options = {}) {
           /\/Stage[_ ]\d+$/i.test(group[0].tournamentPage) &&
           (options.loadTournamentPage !== undefined || options.loadMatches === undefined)) {
           try {
-            completeCount = completedSwissRound(await readRoundPage(group[0].tournamentPage, checkedAt), roundNumber(group[0]))
+            completeCount = completedSwissRound(await readRoundPage(group[0].tournamentPage, checkedAt, timeoutMs), roundNumber(group[0]))
           } catch { /* Keep the bounded recap when the stage page is unavailable. */ }
         }
         if (completeCount > 0) {
@@ -779,17 +783,21 @@ export function createCs2Provider(options = {}) {
 export const createLiquipediaProvider = createCs2Provider
 
 /** Load the ticker once per cache window; a throttled repeat answers from the cache. */
-async function loadMatches() {
+async function loadMatches(timeoutMs) {
   try {
     parseCache = { at: 0, matches: parseCache.matches }
     const data = await apiJson(
       `${API}?action=parse&page=Liquipedia:Matches&prop=text&format=json&formatversion=2`,
       'parse',
+      timeoutMs,
     )
     const matches = parseMatches(data?.parse?.text)
     parseCache = { at: Date.now(), matches }
     return matches
-  } catch {
-    return parseCache.matches.length > 0 ? parseCache.matches : undefined
+  } catch (error) {
+    // A timed-out refresh must not turn an expired fixture list into a new notification.
+    if (error?.name === 'TimeoutError') throw new Error('Liquipedia 请求超时')
+    if (parseCache.matches.length > 0) return parseCache.matches
+    return undefined
   }
 }

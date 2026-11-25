@@ -36,7 +36,7 @@ test('旧 CS2 配置默认固定内容，模板与全局投递方式可保存并
   const before = (await runtime.snapshot()).features.find((item) => item.id === 'cs2-matches')
   assert.equal(before.deliveryMode, 'direct')
   assert.equal(before.noticeMode, 'daily-digest')
-  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'service-turn', defaultTargetSessionIds: [] })
+  assert.deepEqual((await runtime.snapshot()).settings, { deliveryMethod: 'service-turn', defaultTargetSessionIds: [], requestTimeoutSeconds: 30 })
   assert.match(before.serviceTemplate, /\{\{matchups\}\}/)
   assert.match(before.serviceTemplate, /\{\{focusAnalysis\}\}/)
 

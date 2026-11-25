@@ -1,4 +1,6 @@
 /** PandaScore fixture adapter. CS2 endpoints keep the historical /csgo/ prefix. */
+import { DEFAULT_REQUEST_TIMEOUT_SECONDS } from './request-timeout.js'
+
 const API = 'https://api.pandascore.co/csgo/matches'
 const SOURCE_URL = 'https://www.pandascore.co/'
 const MAX_PAGES = 10
@@ -35,7 +37,7 @@ export function normalizePandaScoreMatch(raw) {
 }
 
 /** Read a bounded scheduled-time window. Reject incomplete pagination instead of sending a partial digest. */
-export async function loadPandaScoreMatches({ token, nowMs, fetcher = fetch, pageSize = 100 }) {
+export async function loadPandaScoreMatches({ token, nowMs, fetcher = fetch, pageSize = 100, timeoutMs = DEFAULT_REQUEST_TIMEOUT_SECONDS * 1000 }) {
   if (typeof token !== 'string' || token.trim() === '') throw new Error('PandaScore API Key 未配置')
   const size = Math.min(100, Math.max(1, Math.floor(pageSize)))
   const from = new Date(nowMs - 6 * 60 * 60_000).toISOString()
@@ -48,7 +50,7 @@ export async function loadPandaScoreMatches({ token, nowMs, fetcher = fetch, pag
     url.searchParams.set('page[size]', String(size))
     url.searchParams.set('sort', 'scheduled_at')
     // Bound each request so a stalled API cannot hold the feature's run lock indefinitely.
-    const response = await fetcher(url, { headers: { accept: 'application/json', authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) })
+    const response = await fetcher(url, { headers: { accept: 'application/json', authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs) })
     if (!response.ok) throw new Error(`PandaScore HTTP ${response.status}`)
     const batch = await response.json()
     if (!Array.isArray(batch)) throw new Error('PandaScore 返回的赛程格式无效')

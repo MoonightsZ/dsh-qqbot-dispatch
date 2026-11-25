@@ -30,6 +30,7 @@ import { normalizeTopics } from './modules/casual-chat/topics.js'
 import { CS2_RULE_IDS, defaultCs2NoticeRules, migrateCs2NoticeRules } from './modules/cs2-matches/rules.js'
 import { credentialRefFor } from './credential-ref.js'
 import { CS2_SOURCES } from './modules/cs2-matches/sources.js'
+import { DEFAULT_REQUEST_TIMEOUT_SECONDS, MIN_REQUEST_TIMEOUT_SECONDS, MAX_REQUEST_TIMEOUT_SECONDS, requestTimeoutSeconds } from './modules/cs2-matches/request-timeout.js'
 export { cronMatches, parseCronList } from './cron.js'
 export { credentialRefFor } from './credential-ref.js'
 
@@ -100,7 +101,7 @@ function defaultFeature(entry) {
 function defaultState(entries) {
   return {
     version: 1,
-    settings: { deliveryMethod: 'service-turn', defaultTargetSessionIds: [] },
+    settings: { deliveryMethod: 'service-turn', defaultTargetSessionIds: [], requestTimeoutSeconds: DEFAULT_REQUEST_TIMEOUT_SECONDS },
     features: Object.fromEntries(entries.map((entry) => [entry.id, defaultFeature(entry)])),
   }
 }
@@ -131,6 +132,7 @@ function readStateFile(entries, statePath) {
     if (parsed === null || typeof parsed !== 'object' || parsed.features === null || typeof parsed.features !== 'object') return base
     base.settings.deliveryMethod = parsed.settings?.deliveryMethod === 'upstream-sdk' ? 'upstream-sdk' : 'service-turn'
     base.settings.defaultTargetSessionIds = readSessionIds(parsed.settings?.defaultTargetSessionIds, parsed.settings?.defaultTargetSessionId)
+    base.settings.requestTimeoutSeconds = requestTimeoutSeconds(parsed.settings?.requestTimeoutSeconds)
     for (const [id, feature] of Object.entries(parsed.features)) {
       if (feature === null || typeof feature !== 'object') continue
       base.features[id] = { ...(base.features[id] ?? {}), ...feature }
@@ -377,8 +379,12 @@ export function createFeatureRuntime(options) {
   function saveSettings(input) {
     const hasDeliveryMethod = Object.hasOwn(input ?? {}, 'deliveryMethod')
     const hasTarget = Object.hasOwn(input ?? {}, 'defaultTargetSessionIds') || Object.hasOwn(input ?? {}, 'defaultTargetSessionId')
-    if (!hasDeliveryMethod && !hasTarget) throw new Error('没有可保存的全局配置')
+    const hasRequestTimeout = Object.hasOwn(input ?? {}, 'requestTimeoutSeconds')
+    if (!hasDeliveryMethod && !hasTarget && !hasRequestTimeout) throw new Error('没有可保存的全局配置')
     if (hasDeliveryMethod && input.deliveryMethod !== 'service-turn' && input.deliveryMethod !== 'upstream-sdk') throw new Error('未知的通知投递方式')
+    if (hasRequestTimeout && (!Number.isInteger(input.requestTimeoutSeconds) || input.requestTimeoutSeconds < MIN_REQUEST_TIMEOUT_SECONDS || input.requestTimeoutSeconds > MAX_REQUEST_TIMEOUT_SECONDS)) {
+      throw new Error(`请求超时必须是 ${MIN_REQUEST_TIMEOUT_SECONDS}–${MAX_REQUEST_TIMEOUT_SECONDS} 秒的整数`)
+    }
     const submittedTargets = hasTarget ? submittedSessionIds(input.defaultTargetSessionIds ?? readSessionIds(undefined, input.defaultTargetSessionId)) : null
     const state = read()
     if (hasTarget && submittedTargets.length === 0 && entries.some((entry) => {
@@ -389,6 +395,7 @@ export function createFeatureRuntime(options) {
     }
     if (hasDeliveryMethod) state.settings.deliveryMethod = input.deliveryMethod
     if (hasTarget) state.settings.defaultTargetSessionIds = submittedTargets
+    if (hasRequestTimeout) state.settings.requestTimeoutSeconds = input.requestTimeoutSeconds
     writeStateFile(statePath, state)
     return state.settings
   }

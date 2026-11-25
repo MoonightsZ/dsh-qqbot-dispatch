@@ -7,6 +7,7 @@ import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
 import { createExtensionCard } from './extension-card.js'
 import { createGlobalTargetSettings } from './global-target-settings.js'
+import { createRequestTimeoutSettings } from './request-timeout-settings.js'
 
 const h = React.createElement
 const { useCallback, useEffect, useRef, useState } = React
@@ -25,6 +26,7 @@ const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, for
 const ChatCard = createChatCard({ React, h, C, styles, formatRelative, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, TOPIC_MODELS_PATH, TOPIC_RECOMMEND_PATH, Switch })
 const ExtensionCard = createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
 const GlobalTargetSettings = createGlobalTargetSettings({ React, h, styles, postJson, SETTINGS_PATH })
+const RequestTimeoutSettings = createRequestTimeoutSettings({ React, h, styles, postJson, SETTINGS_PATH })
 
 function DispatchSessionsPage() {
   const [snapshot, setSnapshot] = useState(null)
@@ -340,6 +342,16 @@ function DispatchSessionsPage() {
                   ? '启动或重启后，先让 QQ Bot 收到一条消息再直接发送。CS2 焦点分析在此模式下不生效。'
                   : 'CS2 可选择固定赛事内容或 AI 焦点分析；偶尔闲聊会结合会话上下文生成开场白。'),
             ),
+        ),
+        h(Section, { title: '全局数据源请求', meta: '适用于 CS2 的 Liquipedia 与 PandaScore' },
+          features === null
+            ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
+            : h(RequestTimeoutSettings, {
+              key: String(features.settings?.requestTimeoutSeconds ?? ''),
+              settings: features.settings,
+              onSaved: (settings) => setFeatures((previous) => previous === null ? previous : { ...previous, settings }),
+              onNotice: setNotice,
+            }),
         ),
       ),
 
