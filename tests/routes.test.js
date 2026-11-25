@@ -343,8 +343,66 @@ test('群信息查询失败不误判，成功重试后恢复已有不可用状�
     { method: 'GET', headers: { host: 'localhost:3000' } },
     { writeHead: () => {}, end: (value) => { list = JSON.parse(value) } },
   )
-  assert.equal(list.sessions[0].groupStatus, 'unavailable')
+  assert.deepEqual(list.sessions, [])
+  assert.equal(list.entries[0].groupStatus, 'unavailable')
   groupState = 'available'
   await handlers.get('/qqbot-tool-dispatch/titles/refresh')(request, response)
+  assert.equal(groupHealth.statusFor(peer), null)
+})
+
+test('11293 将群移出会话列表，保留上游映射与历史，重新入群后可恢复', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qqbot-dispatch-nonmember-'))
+  const prefsPath = join(dir, 'model-prefs.json')
+  const peer = { scope: 'group', peerId: 'group-openid', sessionId: 'session-123' }
+  writeFileSync(prefsPath, JSON.stringify({ sessionIds: { 'qqbot:app:group:group-openid': peer.sessionId } }), 'utf8')
+  const groupHealth = createGroupHealthStore(join(dir, 'group-health.json'))
+  const handlers = new Map()
+  let member = false
+  const ctx = {
+    inject: (_names, callback) => callback({ webServer: { register: ({ path, handler }) => { handlers.set(path, handler); return () => {} } }, effect: () => {} }),
+    get: (name) => name === 'sessionController' ? {
+      list: async () => [{ sessionId: peer.sessionId, title: '旧群' }],
+      projections: async () => ({ values: { title: '旧群' } }),
+      rename: async () => {},
+    } : undefined,
+  }
+  registerDispatchRoutes(ctx, {
+    resolver: createSessionResolver({ appId: 'app', prefsPath }), groupHealth,
+    groupNames: { readGroupNames: () => ({}), writeGroupNames: () => {} },
+    features: {}, defaultMode: 'queue',
+    qqbotApi: {
+      readQqbotCredentials: async () => ({ appId: 'app' }),
+      groupInfo: async () => {
+        if (member) return { group_name: '新群' }
+        const error = new Error('鉴权失败，机器人非群成员')
+        error.code = 11293
+        error.httpStatus = 403
+        throw error
+      },
+    }, loadOptionalPatches: () => [],
+  })
+  const call = async (path, url = path) => {
+    let status
+    let body
+    await handlers.get(path)({ method: 'GET', url, headers: { host: 'localhost:3000' } }, {
+      writeHead: (code) => { status = code }, end: (value) => { body = JSON.parse(value) },
+    })
+    return { status, body }
+  }
+  const groupUrl = '/qqbot-tool-dispatch/group-info?openid=group-openid&fresh=1&sessionId=session-123'
+  assert.equal((await call('/qqbot-tool-dispatch/group-info', groupUrl)).status, 400)
+  const removed = (await call('/qqbot-tool-dispatch/sessions')).body
+  assert.deepEqual(removed.sessions, [])
+  assert.equal(removed.entries[0].groupStatus, 'unavailable')
+  assert.equal(groupHealth.statusFor(peer)?.status, 'unavailable')
+  member = true
+  let recheck
+  await handlers.get('/qqbot-tool-dispatch/titles/refresh')(
+    { method: 'POST', url: '/qqbot-tool-dispatch/titles/refresh?unavailable=1', headers: { host: 'localhost:3000' } },
+    { writeHead: () => {}, end: (value) => { recheck = JSON.parse(value) } },
+  )
+  assert.equal(recheck.failed, 0)
+  const restored = (await call('/qqbot-tool-dispatch/sessions')).body
+  assert.equal(restored.sessions[0].sessionId, peer.sessionId)
   assert.equal(groupHealth.statusFor(peer), null)
 })

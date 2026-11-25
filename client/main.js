@@ -12,6 +12,7 @@ const h = React.createElement
 const { useCallback, useEffect, useRef, useState } = React
 const SESSIONS_PATH = '/qqbot-tool-dispatch/sessions'
 const GROUP_INFO_PATH = '/qqbot-tool-dispatch/group-info'
+const TITLES_PATH = '/qqbot-tool-dispatch/titles/refresh'
 const FEATURES_PATH = '/qqbot-tool-dispatch/features'
 const SETTINGS_PATH = '/qqbot-tool-dispatch/settings'
 const FEATURES_RUN_PATH = '/qqbot-tool-dispatch/features/run'
@@ -96,9 +97,27 @@ function DispatchSessionsPage() {
       setNotice({ kind: 'ok', text: `已同步：${name}${typeof num === 'number' && num > 0 ? ` · ${num} 人` : ''}` })
     } catch (failure) {
       await refreshSessions()
-      setNotice({ kind: 'error', text: `同步群信息失败：${String(failure?.message ?? failure)}` })
+      const message = String(failure?.message ?? failure)
+      setNotice({ kind: 'error', text: message.startsWith('11293:')
+        ? '机器人非群成员，已从 QQ 会话列表移除；聊天历史仍保留。重新入群后可点击“重查已移除群”。'
+        : `同步群信息失败：${message}` })
     } finally {
       setRowBusy('')
+    }
+  }, [refreshSessions])
+
+  const recheckUnavailable = useCallback(async () => {
+    setSessionLoading(true)
+    try {
+      const result = await postJson(`${TITLES_PATH}?unavailable=1`, {})
+      await refreshSessions()
+      setNotice({ kind: result.failed > 0 ? 'error' : 'ok', text: result.failed > 0
+        ? `已恢复 ${result.updated + result.skipped} 个群，仍有 ${result.failed} 个群无法查询。`
+        : `已恢复 ${result.updated + result.skipped} 个群。` })
+    } catch (failure) {
+      setNotice({ kind: 'error', text: `重查已移除群失败：${String(failure?.message ?? failure)}` })
+    } finally {
+      setSessionLoading(false)
     }
   }, [refreshSessions])
 
@@ -138,6 +157,7 @@ function DispatchSessionsPage() {
   }, [notice])
 
   const sessions = snapshot?.sessions ?? []
+  const unavailableCount = snapshot?.entries?.filter((entry) => entry.scope === 'group' && entry.groupStatus === 'unavailable').length ?? 0
   const activeFeatureId = features?.features.some((feature) => feature.id === selectedFeatureId)
     ? selectedFeatureId
     : features?.features[0]?.id
@@ -198,7 +218,13 @@ function DispatchSessionsPage() {
           disabled: sessionLoading,
           title: '重新读取本地 QQ 会话列表',
           onClick: () => { void refreshSessions(true) },
-        }, sessionLoading ? '读取中…' : '刷新会话')),
+        }, sessionLoading ? '读取中…' : '刷新会话'),
+        unavailableCount === 0 ? null : h('button', {
+          type: 'button', className: 'qqd-ghost', style: styles.ghostButton,
+          disabled: sessionLoading,
+          title: '向 QQ 平台重新查询已移除的群；成功后恢复到会话列表',
+          onClick: () => { void recheckUnavailable() },
+        }, `重查已移除群（${unavailableCount}）`)),
       ),
 
       notice === null ? null : h('div', {

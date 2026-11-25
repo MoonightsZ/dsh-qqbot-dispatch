@@ -96,16 +96,6 @@ test('私聊会话显示用户 openid 而非 DSH 会话标题', () => {
   assert.match(rendered, /私聊/)
 })
 
-test('群不可用的会话仍可见并提示重新同步', () => {
-  const { SessionTable } = createSessionTables({ h, C, styles, ...common })
-  const view = SessionTable({
-    rows: [{ sessionId: 'session-dead', scope: 'group', groupOpenid: 'openid', groupStatus: 'unavailable', title: '旧群', hasSession: false }],
-    rowBusy: '', onRefresh: () => {},
-  })
-  assert.match(JSON.stringify(view), /群不可用/)
-  assert.match(JSON.stringify(view), /刷新群名/)
-})
-
 test('偶尔闲聊使用独立设置卡片', () => {
   const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
   const view = ChatCard({

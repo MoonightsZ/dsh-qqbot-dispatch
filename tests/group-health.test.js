@@ -18,6 +18,9 @@ test('确认不可用的群状态持久化，但不影响更换后的会话', ()
 
 test('群消息接口的 404 可用于标记当前目标不可达', () => {
   assert.equal(isUnavailableGroupError({ httpStatus: 404 }), true)
+  assert.equal(isUnavailableGroupError({ code: 11293, httpStatus: 403 }), true)
+  assert.equal(isUnavailableGroupError({ code: '11293' }), true)
+  assert.equal(isUnavailableGroupError({ code: 11294, httpStatus: 403 }), false)
   assert.equal(isUnavailableGroupError({ httpStatus: 429 }), false)
   assert.equal(isUnavailableGroupError({ httpStatus: 500 }), false)
   assert.equal(isUnavailableGroupError(new Error('network timeout')), false)

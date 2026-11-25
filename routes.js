@@ -1,4 +1,5 @@
 import { readPrefs, sessionKey } from './session-resolver.js'
+import { isNonMemberGroupError } from './group-health.js'
 import { listTopicModels, recommendTopics } from './modules/casual-chat/recommend.js'
 
 function describeFailure(error) {
@@ -167,7 +168,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
      * title to that name. The current qqbot peer mapping determines the target;
      * cached names never decide which Session belongs to a group.
      */
-    async function refreshSessionTitles() {
+    async function refreshSessionTitles(onlyUnavailable = false) {
       const credentials = await qqbotApi.readQqbotCredentials(loadOptionalPatches)
       if (credentials === undefined) {
         throw new Error('没有找到 QQ Bot 凭据：profile 的 im-qqbot 行里没有 appId/appSecret')
@@ -176,7 +177,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
       if (typeof controller?.list !== 'function') throw new Error('会话列表不可用，无法同步群名')
       const learned = readGroupNames()
       const targets = (await listQqbotSessions(await archivedSessionIds(), knownPeers()))
-        .filter((peer) => peer.scope === 'group')
+        .filter((peer) => peer.scope === 'group' && (!onlyUnavailable || groupHealth?.statusFor(peer)?.status === 'unavailable'))
         .map((peer) => ({ openid: peer.peerId, sessionId: peer.sessionId }))
       const entries = []
       let updated = 0
@@ -207,6 +208,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
             updatedAt: Date.now(),
           }
         } catch (error) {
+          if (isNonMemberGroupError(error)) groupHealth?.markUnavailable(peer, describeFailure(error))
           failed += 1
           entries.push({ openid: target.openid, sessionId: target.sessionId, status: 'failed', error: describeFailure(error) })
         }
@@ -260,7 +262,7 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
               prefsPath,
               defaultMode,
               entries,
-              sessions,
+              sessions: sessions.filter((row) => row.groupStatus !== 'unavailable'),
               ...(warning === undefined ? {} : { warning }),
             })
           } catch (error) {
@@ -281,7 +283,8 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
             return
           }
           try {
-            sendJson(res, 200, await refreshSessionTitles())
+            const onlyUnavailable = new URL(req.url ?? TITLES_PATH, 'http://localhost').searchParams.get('unavailable') === '1'
+            sendJson(res, 200, await refreshSessionTitles(onlyUnavailable))
           } catch (error) {
             sendJson(res, 400, { error: describeFailure(error) })
           }
@@ -398,7 +401,12 @@ export function registerDispatchRoutes(ctx, { resolver, groupNames, groupHealth,
             const fresh = url.searchParams.get('fresh') === '1' || groupHealth?.statusFor(peer)?.status === 'unavailable'
             let info = !fresh && cached !== undefined && Date.now() - cached.at < GROUP_CACHE_MS ? cached.info : undefined
             if (info === undefined) {
-              info = await qqbotApi.groupInfo(openid, credentials)
+              try {
+                info = await qqbotApi.groupInfo(openid, credentials)
+              } catch (error) {
+                if (isNonMemberGroupError(error)) groupHealth?.markUnavailable(peer, describeFailure(error))
+                throw error
+              }
               groupHealth?.markAvailable(peer)
               groupCache.set(openid, { at: Date.now(), info })
             }

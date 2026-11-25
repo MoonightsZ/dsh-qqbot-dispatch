@@ -3,7 +3,11 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
 export function isUnavailableGroupError(error) {
-  return error?.httpStatus === 404
+  return error?.httpStatus === 404 || isNonMemberGroupError(error)
+}
+
+export function isNonMemberGroupError(error) {
+  return String(error?.code) === '11293'
 }
 
 export function assertGroupAvailable(groupHealth, peer) {
