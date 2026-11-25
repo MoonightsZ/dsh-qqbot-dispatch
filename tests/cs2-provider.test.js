@@ -42,6 +42,17 @@ test('解析新版赛事卡的赛程、队伍、赛事与 Bo 信息', () => {
   }])
 })
 
+test('解析带时间属性的 Liquipedia 赛事卡', () => {
+  const html = tickerCard({ timestamp: 1795593900 }).replace(
+    '<div class="match-ticker-card">',
+    '<div class="match-ticker-card" data-match-timestamp="1795593900" data-match-timezone-offset="28800">',
+  )
+  const matches = parseMatches(html)
+  assert.equal(matches.length, 1)
+  assert.equal(matches[0].teamA, 'HEROIC')
+  assert.equal(matches[0].timestamp, 1795593900)
+})
+
 test('同一輪的對局改時間後保持相同識別鍵', () => {
   const first = parseMatches(tickerCard({ timestamp: 1795492800 }))[0]
   const changed = parseMatches(tickerCard({ timestamp: 1795493700 }))[0]

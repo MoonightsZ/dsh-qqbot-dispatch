@@ -91,7 +91,7 @@ export function parseMatches(html) {
       scoreB: scores.length === 2 && scores.every(Number.isSafeInteger) ? scores[1] : null,
     })
   }
-  for (const chunk of text.split('<div class="match-ticker-card">').slice(1)) {
+  for (const chunk of text.split(/<div class="match-ticker-card"[^>]*>/).slice(1)) {
     const timestamp = Number(/data-timestamp="(\d+)"/.exec(chunk)?.[1] ?? 0)
     if (!timestamp) continue
     const opponentsHtml = chunk.split(/<div class="match-ticker-card-tournament(?: [^"]*)?">/)[0]
