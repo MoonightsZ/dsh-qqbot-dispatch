@@ -85,7 +85,7 @@ export function createExtensionCard({ React, h, styles, postJson, FEATURES_PATH,
           ? h('label', { style: styles.field }, h('span', { style: styles.label }, 'Cron 规则（每行一条）'),
             h('textarea', { style: styles.input, value: cronText, onChange: (event) => setCronText(event.target.value) }))
           : h('label', { style: styles.field }, h('span', { style: styles.label }, '检查间隔（分钟）'),
-            h('input', { style: styles.input, type: 'number', min: 15, max: 1440, value: intervalMinutes, onChange: (event) => setIntervalMinutes(event.target.value) })),
+            h('input', { style: styles.input, type: 'number', min: 1, max: 1440, value: intervalMinutes, onChange: (event) => setIntervalMinutes(event.target.value) })),
       ),
       h('div', { style: styles.cardFoot },
         h('button', { type: 'button', style: styles.primaryButton, disabled: busy, onClick: () => { void act('save') } }, '保存'),

@@ -347,8 +347,8 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
             onClick: () => updateRule(mode, { scheduleMode: 'cron' }) }, 'Cron')),
         rule.scheduleMode === 'interval' ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
           h('input', { style: { ...styles.input, flex: '0 1 110px' }, value: String(rule.intervalMinutes),
-            type: 'number', min: 15, max: 1440, onChange: (event) => updateRule(mode, { intervalMinutes: event.target.value }) }),
-          h('span', { style: styles.desc }, '分钟（15–1440）'))
+            type: 'number', min: 1, max: 1440, onChange: (event) => updateRule(mode, { intervalMinutes: event.target.value }) }),
+          h('span', { style: styles.desc }, '分钟（1–1440）'))
           : h('div', null,
             ...entries.map((entry, index) => h('div', { key: index, style: { marginBottom: 8 } },
               h('div', { style: { display: 'flex', gap: 8 } },

@@ -20,7 +20,7 @@ function normalizeRule(value, id) {
     enabled: source.enabled === true,
     scheduleMode: source.scheduleMode === 'cron' ? 'cron' : 'interval',
     cron: cronRules(source.cron ?? fallback.cron).slice(0, 10).map((rule) => rule.slice(0, 120)),
-    intervalMinutes: Number.isFinite(interval) ? Math.min(1440, Math.max(15, interval)) : fallback.intervalMinutes,
+    intervalMinutes: Number.isFinite(interval) ? Math.min(1440, Math.max(1, interval)) : fallback.intervalMinutes,
     lastRunAt: Number.isFinite(source.lastRunAt) && source.lastRunAt > 0 ? source.lastRunAt : 0,
     lastResult: source.lastResult && typeof source.lastResult === 'object' ? source.lastResult : null,
   }

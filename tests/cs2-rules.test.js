@@ -21,6 +21,22 @@ test('新配置只预选每日汇总，模块总开关仍关闭', async () => {
   assert.equal(feature.noticeRules.result.intervalMinutes, 15)
 })
 
+test('通用模组允许保存 1 分钟检查间隔', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'qqbot-interval-')), 'state.json')
+  const runtime = makeRuntime(path)
+  await runtime.save('casual-chat', { intervalMinutes: 1 })
+  const feature = (await runtime.snapshot()).features.find((item) => item.id === 'casual-chat')
+  assert.equal(feature.intervalMinutes, 1)
+})
+
+test('CS2 通知规则允许保存 1 分钟检查间隔', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'qqbot-interval-')), 'state.json')
+  const runtime = makeRuntime(path)
+  await runtime.save('cs2-matches', { noticeRules: { result: { enabled: true, scheduleMode: 'interval', intervalMinutes: 1 } } })
+  const feature = (await runtime.snapshot()).features.find((item) => item.id === 'cs2-matches')
+  assert.equal(feature.noticeRules.result.intervalMinutes, 1)
+})
+
 test('旧单选配置只迁移原通知方式及其计划和结果', async () => {
   const path = join(mkdtempSync(join(tmpdir(), 'qqbot-cs2-rules-')), 'state.json')
   writeFileSync(path, JSON.stringify({ features: { 'cs2-matches': { enabled: true, noticeMode: 'pre-match', scheduleMode: 'interval', intervalMinutes: 30,
