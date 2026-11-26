@@ -212,7 +212,7 @@ test('有功能資料時可繪製設定卡片', () => {
     node.children?.forEach(visit)
   }
   visit(view)
-  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知规则', '模板选择', '通知内容'])
+  assert.deepEqual(headings, ['数据源', '通知目标与赛事', '通知规则', '通知内容'])
   assert.match(JSON.stringify(view), /每日汇总/)
   assert.match(JSON.stringify(view), /赛前提醒/)
   assert.match(JSON.stringify(view), /Valve Tier/)
@@ -424,8 +424,8 @@ test('赛果提醒有独立规则与模板，手动发送只指定赛果', async
     return find(node.children, predicate)
   }
   assert.match(JSON.stringify(view), /赛果提醒开关/)
-  assert.match(JSON.stringify(view), /赛果提醒模板/)
-  assert.match(JSON.stringify(view), /\{\{results\}\}/)
+  assert.match(JSON.stringify(view), /赛果提醒 · 发送内容示例/)
+  assert.doesNotMatch(JSON.stringify(view), /Markdown 模板/)
   const panel = find(view, (node) => node.props?.key === 'result')
   assert.ok(panel)
   find(panel, (node) => node.type === 'button' && node.children.includes('立即发送')).props.onClick()
@@ -474,7 +474,7 @@ test('CS2 立即发送先保存当前配置再请求重发', async () => {
   assert.deepEqual(calls[1].body, { id: 'cs2-matches', noticeMode: 'daily-digest', forceResend: true })
 })
 
-test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', async () => {
+test('CS2 服务回合 AI 模式显示三类内容示例而不提供模板编辑', async () => {
   const submitted = []
   let finished
   const done = new Promise((resolve) => { finished = resolve })
@@ -509,15 +509,19 @@ test('CS2 服务回合模式展示可编辑 Markdown 模板并保存选择', asy
   assert.match(JSON.stringify(view), /内容生成方式/)
   assert.match(JSON.stringify(view), /AI 焦点分析/)
   assert.match(JSON.stringify(view), /固定赛事内容/)
-  assert.match(JSON.stringify(view), /恢复默认模板/)
-  assert.equal(nodes.find((node) => node.type === 'textarea')?.props.value, template)
+  assert.match(JSON.stringify(view), /每日汇总 · 发送内容示例/)
+  assert.match(JSON.stringify(view), /赛前提醒 · 发送内容示例/)
+  assert.match(JSON.stringify(view), /赛果提醒 · 发送内容示例/)
+  assert.match(JSON.stringify(view), /发送时依据赛事数据与已核实的近期公开信息生成 1–4 条/)
+  assert.doesNotMatch(JSON.stringify(view), /模板选择|Markdown 模板|恢复默认模板/)
+  assert.equal(nodes.some((node) => node.type === 'textarea'), false)
   nodes.find((node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
   assert.equal(submitted[0].deliveryMode, 'service-turn')
-  assert.equal(submitted[0].digestTemplate, template)
+  assert.equal(Object.hasOwn(submitted[0], 'digestTemplate'), false)
 })
 
-test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', async () => {
+test('CS2 固定内容模式显示三类内容示例', async () => {
   const state = []
   let cursor = 0
   const StatefulReact = { useState: (initial) => {
@@ -546,13 +550,15 @@ test('CS2 切换汇总和赛前提醒时显示各自模板并同时保存', asyn
     }
     return visit(view)
   }
-  assert.equal(find(render(), (node) => node.type === 'textarea')?.props.value, digestTemplate)
-  find(render(), (node) => node.type === 'button' && node.children.includes('赛前提醒模板')).props.onClick()
-  assert.equal(find(render(), (node) => node.type === 'textarea')?.props.value, preMatchTemplate)
+  const rendered = JSON.stringify(render())
+  assert.match(rendered, /每日汇总 · 发送内容示例/)
+  assert.match(rendered, /赛前提醒 · 发送内容示例/)
+  assert.match(rendered, /赛果提醒 · 发送内容示例/)
+  assert.doesNotMatch(rendered, /模板选择|Markdown 模板/)
   find(render(), (node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
-  assert.equal(payload.digestTemplate, digestTemplate)
-  assert.equal(payload.preMatchTemplate, preMatchTemplate)
+  assert.equal(Object.hasOwn(payload, 'digestTemplate'), false)
+  assert.equal(Object.hasOwn(payload, 'preMatchTemplate'), false)
 })
 
 test('CS2 直接发送模式隐藏内容设置，显示实际排版预览和红字原因', async () => {

@@ -105,9 +105,9 @@ test('PandaScore 使用来源 Tier 筛选，忽略仅属于 Liquipedia 的 Valve
   assert.equal((await provider({ ...args, feature: { ...base, seen: {}, values: { teams: [], tiers: [], valveTiers: ['Major'] } } })).sent, 1)
 })
 
-test('PandaScore 服务回合模板标注真实来源和来源 Tier', () => {
+test('PandaScore 服务回合正文标注真实来源和来源 Tier', () => {
   const prompt = composeCs2ServiceTurnPrompt({ title: 'IEM', sourceName: 'PandaScore',
-    sourceUrl: 'https://www.pandascore.co/', sourceLicense: '', tier: 'S', matchupsMarkdown: '- Spirit vs Vitality' },
+    markdown: '# ⚔ 即将开赛｜IEM\nPandaScore Tier：S\n- Spirit vs Vitality\n\n---\n数据来源：[PandaScore](https://www.pandascore.co/)' },
   DEFAULT_CS2_PRE_MATCH_TEMPLATE, { teamA: 'Spirit', teamB: 'Vitality' }, 'pre-match')
   assert.match(prompt, /PandaScore Tier：S/)
   assert.match(prompt, /数据来源：\[PandaScore\]/)

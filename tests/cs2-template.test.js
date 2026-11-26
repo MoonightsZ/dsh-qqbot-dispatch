@@ -7,10 +7,52 @@ import { createFeatureRuntime } from '../features.js'
 import { DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE, composeCs2ServiceTurnPrompt } from '../modules/cs2-matches/template.js'
 
 test('服務回合模板把已確認等級標為 Valve Tier', () => {
-  const section = { title: 'PGL Major', tier: 'Major', matchupsMarkdown: '- A vs B', sourceUrl: 'https://liquipedia.net/counterstrike/PGL' }
+  const section = { title: 'PGL Major', markdown: '# PGL Major\nValve Tier：Major\n- A vs B\n---\n数据来源：Liquipedia' }
   const prompt = composeCs2ServiceTurnPrompt(section, DEFAULT_CS2_PRE_MATCH_TEMPLATE, undefined, 'pre-match')
   assert.match(prompt, /Valve Tier：Major/)
   assert.doesNotMatch(prompt, /Major 级赛事|Major 級賽事/)
+})
+
+test('每日汇总默认模板沿用简洁赛程，并将看点放在赛程之后', () => {
+  const section = {
+    title: 'CS2 2026-11-26 赛程', timeZone: 'Asia/Shanghai', matchCount: 2,
+    markdown: '# 📅 CS2 2026-11-26 赛程 · 共 2 场\n时区：Asia/Shanghai\n\n## PGL Major Singapore 2026 · Valve Tier：Major\n- 14:00｜HEROIC ⚔ FaZe Clan · Bo3\n- 19:00｜Imperial Esports ⚔ Team Liquid · Bo3\n\n---\n数据来源：Liquipedia',
+    sourceUrl: 'https://liquipedia.net/counterstrike/PGL_Major_Singapore_2026',
+  }
+  const prompt = composeCs2ServiceTurnPrompt(section, DEFAULT_CS2_DIGEST_TEMPLATE, undefined)
+  assert.match(prompt, /# 📅 CS2 2026-11-26 赛程 · 共 2 场\n时区：Asia\/Shanghai/)
+  assert.match(prompt, /## PGL Major Singapore 2026 · Valve Tier：Major\n- 14:00｜HEROIC ⚔ FaZe Clan · Bo3/)
+  assert.ok(prompt.indexOf('## 赛事看点') > prompt.indexOf('Imperial Esports ⚔ Team Liquid'))
+  assert.doesNotMatch(prompt, /## 赛程总览|共 2 场 · Valve Tier/)
+})
+
+test('AI 看点可搜索近 30 天信息并核实战队、积分和晋级影响', () => {
+  const section = { title: 'CS2 2026-11-26 赛程', markdown: '# CS2 2026-11-26 赛程\n- HEROIC ⚔ FaZe Clan\n---\n数据来源：Liquipedia' }
+  const prompt = composeCs2ServiceTurnPrompt(section, DEFAULT_CS2_DIGEST_TEMPLATE, undefined)
+  assert.match(prompt, /tools\/search/)
+  assert.match(prompt, /tools\/fetch/)
+  assert.match(prompt, /检索.*原始页面.*核实/)
+  assert.doesNotMatch(prompt, /search_tool|web_search/)
+  assert.match(prompt, /过去 30 天/)
+  assert.match(prompt, /战队.*选手.*对阵/)
+  assert.match(prompt, /Valve.*排名.*积分/)
+  assert.match(prompt, /晋级条件.*后续大赛.*参赛资格/)
+  assert.match(prompt, /官方.*规则.*来源链接/)
+  assert.match(prompt, /查不到.*不要推断/)
+  assert.match(prompt, /1–4 条/)
+  assert.doesNotMatch(prompt, /不要自行联网补充|仅根据本次提供的赛事数据/)
+})
+
+test('赛果看点可用已核实的近期资料，但不把搜索摘要当成已确认赛况', () => {
+  const section = { title: 'Test Cup', markdown: '# 🏁 已确认赛果｜Test Cup\nTeam A 2 : 1 Team B\n\n---\n数据来源：Liquipedia' }
+  const prompt = composeCs2ServiceTurnPrompt(section, DEFAULT_CS2_RESULT_TEMPLATE,
+    { teamA: 'Team A', teamB: 'Team B', scoreA: 2, scoreB: 1 }, 'result')
+  assert.match(prompt, /tools\/search/)
+  assert.match(prompt, /tools\/fetch/)
+  assert.match(prompt, /已确认的赛果：Team A 2:1 Team B/)
+  assert.match(prompt, /比赛过程.*核实/)
+  assert.match(prompt, /不得把.*搜索.*未确认.*事实/)
+  assert.match(prompt, /1–4 条赛果看点/)
 })
 
 function runtimeAt(path) {

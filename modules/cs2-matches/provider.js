@@ -13,7 +13,7 @@
  *
  * @module dsh-qqbot-dispatch/cs2-matches
  */
-import { composeCs2FixedNoticePrompt, composeCs2ServiceTurnPrompt, migrateCs2ModeTemplates } from './template.js'
+import { composeCs2FixedNoticePrompt, composeCs2ServiceTurnPrompt } from './template.js'
 import { createNotificationDispatcher } from '../../notification-dispatcher.js'
 import { credentialRefFor } from '../../credential-ref.js'
 import { loadPandaScoreMatches } from './pandascore.js'
@@ -710,11 +710,6 @@ export function createCs2Provider(options = {}) {
         feature.seen[seenKey(`schedule:${noticeIdentity(match)}`)] = match.timestamp * 1000
       }
     }
-    const modeTemplates = migrateCs2ModeTemplates(feature.serviceTemplate)
-    const serviceTemplate = noticeMode === 'daily-digest'
-      ? feature.digestTemplate ?? modeTemplates.digestTemplate
-      : noticeMode === 'pre-match' ? feature.preMatchTemplate ?? modeTemplates.preMatchTemplate
-        : feature.resultTemplate
     let channel = 'service-turn'
     let submitted = 0
     for (const match of changes) {
@@ -743,7 +738,7 @@ export function createCs2Provider(options = {}) {
           sessionId: target.sessionId,
           markdown: section.markdown,
           servicePrompt: () => feature.deliveryMode === 'service-turn'
-            ? composeCs2ServiceTurnPrompt(section, serviceTemplate, pickFocus(section.matches, watched, now()) ?? section.matches[0], noticeMode)
+            ? composeCs2ServiceTurnPrompt(section, undefined, pickFocus(section.matches, watched, now()) ?? section.matches[0], noticeMode)
             : composeCs2FixedNoticePrompt(section.markdown),
         })
       } catch (error) {

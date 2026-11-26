@@ -593,7 +593,7 @@ test('赛前已通知的比赛仍可发赛果，发送失败后可以重试', as
   assert.equal(sent.length, 1)
 })
 
-test('赛果服务回合使用专用模板且只提供已确认比分', async () => {
+test('赛果服务回合沿用固定正文且只提供已确认比分', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const match = { id: 'final', timestamp: Math.floor((now - 60_000) / 1000), teamA: 'Team A', teamB: 'Team B',
     tournament: 'Test Cup', tournamentPage: '', bestOf: 3, finished: true, scoreA: 2, scoreB: 1 }
@@ -603,10 +603,11 @@ test('赛果服务回合使用专用模板且只提供已确认比分', async ()
     resultTemplate: '# 赛果 {{tournament}}\n{{results}}\n{{focusAnalysis}}\n[Liquipedia]({{sourceUrl}})' }
   const input = { feature, noticeMode: 'result', settings: { deliveryMethod: 'service-turn' }, target: { sessionId: 'session-1' }, now: () => now }
   assert.equal((await provider(input)).sent, 1)
-  assert.match(prompts[0], /# 赛果 Test Cup/)
-  assert.match(prompts[0], /Team A 2 : 1 Team B/)
+  assert.match(prompts[0], /# 🏁 已确认赛果｜Test Cup/)
+  assert.match(prompts[0], /Team A \*\*2 : 1\*\* Team B/)
+  assert.match(prompts[0], /## 赛果看点/)
   assert.match(prompts[0], /时区：Asia\/Shanghai/)
-  assert.match(prompts[0], /不得推断未提供的地图、回合或胜负原因/)
+  assert.match(prompts[0], /比赛过程只有经可靠来源核实后才能提及/)
   assert.doesNotMatch(prompts[0], /\{\{results\}\}/)
 })
 
@@ -684,7 +685,7 @@ test('运行时仅把显式重发选项传给 provider', async () => {
   assert.deepEqual(received, [false, true, false])
 })
 
-test('服务回合模式按赛事提交模板任务并沿用去重', async () => {
+test('服务回合模式按赛事提交固定正文与看点任务并沿用去重', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const makeMatch = (id, tournament, hour) => ({
     id, timestamp: Math.floor((now + hour * 3_600_000) / 1000),
@@ -709,10 +710,10 @@ test('服务回合模式按赛事提交模板任务并沿用去重', async () =>
   assert.equal(result.sent, 3)
   assert.equal(submitted.length, 2)
   assert.equal(submitted[0].sessionId, 'session-1')
-  assert.match(submitted[0].text, /# Test Cup/)
-  assert.match(submitted[0].text, /## 对局[\s\S]*Team A[\s\S]*Team B[\s\S]*## 焦点分析/)
+  assert.match(submitted[0].text, /# ⚔ 即将开赛｜Test Cup/)
+  assert.match(submitted[0].text, /Team A[\s\S]*Team B[\s\S]*## 赛前焦点/)
   assert.match(submitted[0].text, /时区：Asia\/Shanghai/)
-  assert.match(submitted[0].text, /不得编造.*战绩.*阵容.*胜率/)
+  assert.match(submitted[0].text, /不得编造.*阵容.*战绩.*胜率/)
   assert.match(submitted[0].text, /建议关注的对局：Team A ⚔ Team B/)
   assert.doesNotMatch(submitted[0].text, /\{\{(?:tournament|matchups|sourceUrl)\}\}/)
   assert.match(submitted[0].text, /\{\{focusAnalysis\}\}/)
@@ -722,7 +723,7 @@ test('服务回合模式按赛事提交模板任务并沿用去重', async () =>
   assert.equal(submitted.length, 4)
 })
 
-test('每日汇总和赛前提醒分别使用对应的服务回合模板', async () => {
+test('每日汇总和赛前提醒分别沿用固定正文并附加看点', async () => {
   const now = Date.parse('2026-11-09T10:00:00Z')
   const match = { id: 'split-template', timestamp: Math.floor((now + 30 * 60_000) / 1000),
     teamA: 'Team A', teamB: 'Team B', pageA: 'Team_A', pageB: 'Team_B',
@@ -736,12 +737,12 @@ test('每日汇总和赛前提醒分别使用对应的服务回合模板', async
   await provider({ ...input, feature: { ...base, noticeMode: 'daily-digest', digestDay: 'today', seen: {} } })
   await provider({ ...input, feature: { ...base, noticeMode: 'pre-match', leadMinutes: 60, seen: {} } })
   assert.equal(sent.length, 2)
-  assert.match(sent[0], /# 汇总 CS2 2026-11-09 赛程/)
+  assert.match(sent[0], /# 📅 CS2 2026-11-09 赛程 · 共 1 场/)
   assert.match(sent[0], /## Test Cup[\s\S]*Team A/)
-  assert.match(sent[0], /当天赛程看点/)
-  assert.match(sent[1], /# 赛前 Test Cup/)
+  assert.match(sent[0], /当天赛事看点/)
+  assert.match(sent[1], /# ⚔ 即将开赛｜Test Cup/)
   assert.match(sent[1], /赛前看点/)
-  assert.doesNotMatch(sent[1], /# 汇总/)
+  assert.doesNotMatch(sent[1], /# 📅 CS2/)
 })
 
 test('固定内容通知走服务回合，提交失败不记录已通知', async () => {

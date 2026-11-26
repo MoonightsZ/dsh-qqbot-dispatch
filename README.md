@@ -83,8 +83,8 @@ dsh plugin --profile web add /abs/path/to/dsh-qqbot-dispatch
 
 | 模式 | CS2 赛事通知 | 偶尔闲聊 |
 | --- | --- | --- |
-| 服务回合投递（默认） | 固定赛事内容由 Agent 尽量原样输出；选择“AI 焦点分析”时，Agent 填充模板并生成分析。 | Agent 结合会话上下文生成开场白。 |
-| 直接发送 Markdown | 调用上游 Bot 实例的 `sendMarkdown` 发送固定赛事正文；模板和焦点分析暂不生效。 | 将选中的话题作为开场白原文发送。 |
+| 服务回合投递（默认） | 固定赛事内容由 Agent 尽量原样输出；选择“AI 焦点分析”时，在相同赛事正文后添加 1–4 条看点，可用 `tools/search` 检索近 30 天公开信息，并用 `tools/fetch` 核实原始来源；积分与晋级影响须核实规则。 | Agent 结合会话上下文生成开场白。 |
+| 直接发送 Markdown | 调用上游 Bot 实例的 `sendMarkdown` 发送固定赛事正文；焦点分析不生效。 | 将选中的话题作为开场白原文发送。 |
 
 「配置」页另有全局数据源请求超时，适用于 CS2 的 Liquipedia 与 PandaScore 单次 HTTP 请求，默认 30 秒，可设置 5–120 秒。Liquipedia 的请求间隔不计入此超时。全局设置保存在 `~/.dsh-qqbot/dispatch-features.json` 的 `settings.defaultTargetSessionIds`、`settings.deliveryMethod` 和 `settings.requestTimeoutSeconds` 中；模组的独立目标保存在 `target.sessionIds`。旧单目标配置会自动迁移。各投递方式的限制见下方「资料与限制」。
 

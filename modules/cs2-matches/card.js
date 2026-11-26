@@ -2,7 +2,6 @@ import { cronRules as splitCronRules, describeCron, formatZonedTime } from '../.
 import { featureTargetOptions } from '../../client/session-options.js'
 import { createTargetPicker } from '../../client/target-picker.js'
 import { summarizeTargetResults } from '../../client/target-results.js'
-import { DEFAULT_CS2_SERVICE_TEMPLATE, DEFAULT_CS2_DIGEST_TEMPLATE, DEFAULT_CS2_PRE_MATCH_TEMPLATE, DEFAULT_CS2_RESULT_TEMPLATE } from './template.js'
 import { migrateCs2NoticeRules } from './rules.js'
 import { previewCs2FixedNotice } from './provider.js'
 import { cs2SourceFor } from './sources.js'
@@ -149,14 +148,9 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
   const [noticeRules, setNoticeRules] = useState(migrateCs2NoticeRules(feature, 'daily-digest'))
-  const [noticeMode, setNoticeMode] = useState(['daily-digest', 'pre-match', 'result'].includes(feature.noticeMode) ? feature.noticeMode : 'daily-digest')
   const [digestDay, setDigestDay] = useState(feature.digestDay === 'today' ? 'today' : 'tomorrow')
   const [leadMinutesText, setLeadMinutesText] = useState(String(feature.leadMinutes ?? 60))
   const [deliveryMode, setDeliveryMode] = useState(feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct')
-  const [serviceTemplate, setServiceTemplate] = useState(feature.serviceTemplate ?? DEFAULT_CS2_SERVICE_TEMPLATE)
-  const [digestTemplate, setDigestTemplate] = useState(feature.digestTemplate ?? DEFAULT_CS2_DIGEST_TEMPLATE)
-  const [preMatchTemplate, setPreMatchTemplate] = useState(feature.preMatchTemplate ?? DEFAULT_CS2_PRE_MATCH_TEMPLATE)
-  const [resultTemplate, setResultTemplate] = useState(feature.resultTemplate ?? DEFAULT_CS2_RESULT_TEMPLATE)
   const [busy, setBusy] = useState(false)
 
   const updateRule = (mode, patch) => setNoticeRules((current) => ({ ...current, [mode]: { ...current[mode], ...patch } }))
@@ -179,10 +173,6 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     enabled: nextEnabled === undefined ? enabled : nextEnabled,
     target: { sessionIds },
     deliveryMode,
-    serviceTemplate,
-    digestTemplate,
-    preMatchTemplate,
-    resultTemplate,
     // Keep an old source-only filter until a Valve selection or deliberate clearing can replace it.
     tierMode: sourceId === 'liquipedia' && feature.tierMode !== 'channel' && tiers.length > 0 && valveTiers.length === 0
       ? 'legacy' : 'channel',
@@ -280,14 +270,6 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     ...children,
   )
 
-  const currentTemplate = noticeMode === 'daily-digest' ? digestTemplate : noticeMode === 'pre-match' ? preMatchTemplate : resultTemplate
-  const updateCurrentTemplate = noticeMode === 'daily-digest' ? setDigestTemplate : noticeMode === 'pre-match' ? setPreMatchTemplate : setResultTemplate
-  const defaultTemplate = noticeMode === 'daily-digest' ? DEFAULT_CS2_DIGEST_TEMPLATE : noticeMode === 'pre-match' ? DEFAULT_CS2_PRE_MATCH_TEMPLATE : DEFAULT_CS2_RESULT_TEMPLATE
-  const templateName = noticeMode === 'daily-digest' ? '每日汇总' : noticeMode === 'pre-match' ? '赛前提醒' : '赛果提醒'
-  const templateHelp = noticeMode === 'daily-digest'
-    ? '占位符：{{title}}、{{schedule}}、{{focusAnalysis}}、{{sourceUrl}}。保留按赛事分组的赛程、赛事看点与数据来源。'
-    : noticeMode === 'result' ? '占位符：{{tournament}}、{{tier}}、{{results}}、{{focusAnalysis}}、{{sourceUrl}}。只依据已确认比分分析，不补造地图或胜负原因。'
-    : '占位符：{{tournament}}、{{tier}}、{{matchups}}、{{focusAnalysis}}、{{sourceUrl}}。保留对局、焦点分析与数据来源。'
   const credentialCurrent = sourceId === feature.source?.id
   const sourceCredential = feature.credentialStatuses?.[sourceId] ?? (credentialCurrent ? feature.credential : undefined)
   const credentialConfigured = sourceCredential?.configured === true
@@ -309,7 +291,10 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     h('span', { style: styles.label }, `${mode === 'daily-digest' ? '每日汇总' : mode === 'pre-match' ? '赛前提醒' : '赛果提醒'} · 发送内容示例`),
     h('div', { style: { padding: 12, border: `1px solid ${C.border}`, borderRadius: 8,
       background: C.layer2, color: C.primary, overflowWrap: 'anywhere', fontSize: 12, lineHeight: 1.6 } },
-    ...previewCs2FixedNotice(mode, feature.timeZone ?? 'Asia/Shanghai', sourceId).split('\n').map(previewLine)),
+    ...previewCs2FixedNotice(mode, feature.timeZone ?? 'Asia/Shanghai', sourceId)
+      .replace('\n---\n', deliveryMode === 'service-turn' && !contentLocked
+        ? `\n## ${mode === 'daily-digest' ? '赛事看点' : mode === 'pre-match' ? '赛前焦点' : '赛果看点'}\n（发送时依据赛事数据与已核实的近期公开信息生成 1–4 条）\n\n---\n`
+        : '\n---\n').split('\n').map(previewLine)),
   )
   const rulePanel = (mode, title, description) => {
     const rule = noticeRules[mode]
@@ -380,13 +365,13 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
     )
   }
   const contentSection = contentLocked
-    ? configSection('05', '通知内容预览', '以下以示例赛事展示实际发送格式，比赛信息会在发送时替换。',
-      h('p', { style: { ...styles.warnText, color: C.error } }, '全局已选择“直接发送 Markdown”，此模式只发送固定赛事内容，无法设置 AI 焦点分析或编辑模板。请在“配置”页切换为服务回合投递后再设置。'),
+    ? configSection('04', '通知内容预览', '以下以示例赛事展示实际发送格式，比赛信息会在发送时替换。',
+      h('p', { style: { ...styles.warnText, color: C.error } }, '全局已选择“直接发送 Markdown”，此模式只发送固定赛事内容，无法设置 AI 焦点分析。请在“配置”页切换为服务回合投递后再设置。'),
       fixedPreview('daily-digest'),
       fixedPreview('pre-match'),
       fixedPreview('result'),
     )
-    : configSection('05', '通知内容', '选择固定赛事正文，或在服务回合中按通知方式生成分析。',
+    : configSection('04', '通知内容', '选择固定赛事正文，或在服务回合中按通知方式生成分析。',
     h('div', { style: styles.field },
       h('span', { style: styles.label }, '内容生成方式'),
       h('div', { style: styles.segmented },
@@ -396,24 +381,10 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
           onClick: () => setDeliveryMode('service-turn') }, 'AI 焦点分析'),
       ),
       h('span', { style: styles.desc }, deliveryMode === 'service-turn'
-          ? `Agent 使用${templateName}模板生成赛程与分析；QQ 送达仍受平台限制。`
+          ? 'Agent 在固定赛事正文后添加 1–4 条看点；可检索近 30 天公开信息，积分与晋级影响须核实规则。QQ 送达仍受平台限制。'
           : '已排版的赛事正文通过服务回合提交。'),
     ),
-    deliveryMode !== 'service-turn' ? fixedPreview(noticeMode) : h('div', { style: { ...styles.field, marginTop: 14 } },
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-        h('span', { style: styles.label }, `${templateName} Markdown 模板`),
-        h('button', { type: 'button', style: { ...styles.ghostButton, marginLeft: 'auto', padding: '3px 9px' },
-          onClick: () => updateCurrentTemplate(defaultTemplate) }, '恢复默认模板'),
-      ),
-      h('textarea', {
-        style: { ...styles.input, minHeight: 180, resize: 'vertical', fontFamily: 'ui-monospace, monospace', lineHeight: 1.5 },
-        value: currentTemplate,
-        maxLength: 6000,
-        'aria-label': `CS2 ${templateName} Markdown 模板`,
-        onChange: (event) => updateCurrentTemplate(event.target.value),
-      }),
-      h('span', { style: styles.desc }, `${templateHelp}分析仅依据赛事数据和会话上下文。`),
-    ),
+    fixedPreview('daily-digest'), fixedPreview('pre-match'), fixedPreview('result'),
   )
 
   return h('div', { style: enabled ? { ...styles.card, ...styles.cardOn } : styles.card },
@@ -533,16 +504,6 @@ function FeatureCard({ feature, settings, sessions, open, navigationMode = false
       rulePanel('daily-digest', '每日赛程汇总', '按所选日期汇总赛程，每个日期最多自动发送一次。'),
       rulePanel('pre-match', '赛前提醒', '赛事进入提醒窗口后首次检查发送一次；错过开赛不补发。'),
       rulePanel('result', '赛果提醒', '比赛完赛且比分明确后发送一次，默认每 15 分钟检查。'),
-    ),
-    contentLocked ? null : configSection('04', '模板选择', '仅选择下方要编辑的模板；不会切换或关闭通知规则。',
-      h('div', { style: { ...styles.segmented, display: 'flex', flexWrap: 'wrap', maxWidth: '100%' } },
-        h('button', { type: 'button', style: noticeMode === 'daily-digest' ? styles.segOn : styles.seg,
-          onClick: () => setNoticeMode('daily-digest') }, '每日汇总模板'),
-        h('button', { type: 'button', style: noticeMode === 'pre-match' ? styles.segOn : styles.seg,
-          onClick: () => setNoticeMode('pre-match') }, '赛前提醒模板'),
-        h('button', { type: 'button', style: noticeMode === 'result' ? styles.segOn : styles.seg,
-          onClick: () => setNoticeMode('result') }, '赛果提醒模板'),
-      ),
     ),
     contentSection,
 
