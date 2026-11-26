@@ -1,0 +1,17 @@
+{
+  "id": "group-chat-gate",
+  "label": "群聊频控",
+  "description": "实时处理未 @ 的纯文字群消息：无效过滤、防抖合并、概率接话、有限积压及每群限速。私聊、@ 消息和附件直接放行。",
+  "provider": "builtin",
+  "realtime": true,
+  "fields": [
+    { "key": "chancePercent", "kind": "text", "label": "接话概率（%）", "default": "30" },
+    { "key": "debounceSeconds", "kind": "text", "label": "静默合并（秒）", "default": "30" },
+    { "key": "backlogMax", "kind": "text", "label": "每群积压上限（条）", "default": "30" },
+    { "key": "minIntervalSeconds", "kind": "text", "label": "最短间隔（秒，0 不限）", "default": "0" },
+    { "key": "maxPerHour", "kind": "text", "label": "每小时上限（0 不限）", "default": "0" },
+    { "key": "maxPerDay", "kind": "text", "label": "每天上限（0 不限）", "default": "0" },
+    { "key": "filterInvalid", "kind": "text", "label": "过滤无效文字", "default": "true" }
+  ],
+  "defaults": { "source": { "id": "none" }, "intervalMinutes": 60 }
+}

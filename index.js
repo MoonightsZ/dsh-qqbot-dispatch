@@ -7,6 +7,7 @@ import { createGroupHealthStore } from './group-health.js'
 import { createServiceTurnDispatcher } from './service-turn.js'
 import { createUpstreamSender } from './upstream-sender.js'
 import { createNotificationDispatcher } from './notification-dispatcher.js'
+import { createGroupChatGate } from './modules/group-chat-gate/provider.js'
 import { createChatProvider } from './modules/casual-chat/provider.js'
 import { createLazyProvider, discoverModules } from './module-discovery.js'
 import { registerDispatchTools } from './tools.js'
@@ -29,14 +30,27 @@ export async function apply(ctx, config = {}) {
   let upstreamSender
   try {
     const { QQBot } = await import('@tencent-connect/qqbot-nodejs')
+    try {
+      const gateFeature = features.getFeature('group-chat-gate')
+      const gate = createGroupChatGate({ QQBot, feature: gateFeature,
+        onError: (error) => console.warn(`[qqbot-dispatch] 群聊频控重放失败：${String(error?.message ?? error)}`) })
+      const unsubscribe = features.onSave('group-chat-gate', (feature) => gate.update(feature))
+      ctx.effect(() => () => { unsubscribe(); gate.dispose() }, 'qqbot-dispatch.group-chat-gate')
+    } catch (error) {
+      const message = String(error?.message ?? error)
+      features.setRuntimeError('group-chat-gate', message)
+      console.warn(`[qqbot-dispatch] 群聊频控不可用：${message}`)
+    }
     upstreamSender = createUpstreamSender({ QQBot, resolver, groupHealth })
     ctx.effect(() => () => upstreamSender.dispose(), 'qqbot-dispatch.upstream-sender')
   } catch (error) {
+    features.setRuntimeError('group-chat-gate', `上游 QQ Bot SDK 不可用：${String(error?.message ?? error)}`)
     upstreamSender = { send: async () => { throw new Error(`上游 QQ Bot 发送器不可用：${String(error?.message ?? error)}`) } }
   }
   const notificationDispatcher = createNotificationDispatcher({ serviceTurn, upstreamSender })
   for (const module of modules) {
     const id = module.definition.id
+    if (id === 'group-chat-gate') continue
     const provider = id === 'cs2-matches'
       ? createCs2Provider({ notificationDispatcher })
       : id === 'casual-chat'

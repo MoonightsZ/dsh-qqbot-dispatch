@@ -5,6 +5,7 @@ import { createSessionTables } from './tables.js'
 import { createFeatureNavigation } from './feature-navigation.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
+import { createGroupGateCard } from '../modules/group-chat-gate/card.js'
 import { createExtensionCard } from './extension-card.js'
 import { createGlobalTargetSettings } from './global-target-settings.js'
 import { createRequestTimeoutSettings } from './request-timeout-settings.js'
@@ -24,6 +25,7 @@ const { SessionTable } = createSessionTables({ h, C, styles, formatRelative, for
 const FeatureNavigation = createFeatureNavigation({ h, styles })
 const FeatureCard = createFeatureCard({ React, h, C, styles, formatRelative, formatAbsolute, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch, Section })
 const ChatCard = createChatCard({ React, h, C, styles, formatRelative, readJson, postJson, FEATURES_PATH, FEATURES_RUN_PATH, TOPIC_MODELS_PATH, TOPIC_RECOMMEND_PATH, Switch })
+const GroupGateCard = createGroupGateCard({ React, h, styles, postJson, FEATURES_PATH, Switch })
 const ExtensionCard = createExtensionCard({ React, h, styles, postJson, FEATURES_PATH, FEATURES_RUN_PATH, Switch })
 const GlobalTargetSettings = createGlobalTargetSettings({ React, h, styles, postJson, SETTINGS_PATH })
 const RequestTimeoutSettings = createRequestTimeoutSettings({ React, h, styles, postJson, SETTINGS_PATH })
@@ -281,14 +283,14 @@ function DispatchSessionsPage() {
       tab !== 'features' ? null : h('div', null,
         h(Section, { title: '功能模组', meta: features === null ? '' : `${features.features.filter((feature) => feature.enabled).length} / ${features.features.length} 已启用` },
           h('p', { style: { ...styles.desc, marginTop: 0, marginBottom: 10 } },
-            '各模组独立保存开关与配置；通知投递方式由「配置」页统一控制。'),
+            '各模组独立保存开关与配置；通知模组的投递方式由「配置」页统一控制。'),
           features === null
             ? h('div', { style: styles.empty }, loading ? '读取中…' : '功能接口不可用（宿主未提供）')
             : h('div', { style: { containerType: 'inline-size' } }, h('div', { className: 'qqd-feature-layout' },
               h(FeatureNavigation, { features: features.features, selectedId: activeFeatureId, onSelect: setSelectedFeatureId }),
               h('div', { style: { minWidth: 0 } },
                 ...features.features.map((feature) => h('div', { key: feature.id, hidden: activeFeatureId !== feature.id },
-                  h(feature.extension ? ExtensionCard : feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
+                  h(feature.id === 'group-chat-gate' ? GroupGateCard : feature.extension ? ExtensionCard : feature.id === 'casual-chat' ? ChatCard : FeatureCard, {
                     feature,
                     settings: features.settings,
                     sessions,
@@ -306,7 +308,7 @@ function DispatchSessionsPage() {
       ),
 
       tab !== 'settings' ? null : h('div', null,
-        h(Section, { title: '全局默认目标会话', meta: '未单独指定目标的模组会继承' },
+        h(Section, { title: '全局默认目标会话', meta: '未单独指定目标的通知模组会继承' },
           features === null
             ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
             : h(GlobalTargetSettings, {
@@ -319,7 +321,7 @@ function DispatchSessionsPage() {
               onNotice: setNotice,
             }),
         ),
-        h(Section, { title: '全局通知投递', meta: '适用于所有模组' },
+        h(Section, { title: '全局通知投递', meta: '适用于通知模组' },
           features === null
             ? h('div', { style: styles.empty }, loading ? '读取中…' : '配置接口不可用')
             : h('div', { style: { ...styles.panel, padding: '18px 20px' } },

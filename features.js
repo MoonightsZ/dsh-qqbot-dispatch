@@ -222,7 +222,7 @@ export function configFromInput(entry, input) {
   const submitted = source.values !== null && typeof source.values === 'object' ? source.values : {}
   const values = {}
   for (const field of entry.fields) {
-    const raw = submitted[field.key]
+    const raw = entry.id === 'group-chat-gate' ? (submitted[field.key] ?? field.default) : submitted[field.key]
     if (field.kind === 'topics') {
       values[field.key] = normalizeTopics(raw)
     } else if (field.kind === 'list') {
@@ -240,6 +240,23 @@ export function configFromInput(entry, input) {
     } else {
       values[field.key] = String(raw ?? '').slice(0, MAX_VALUE_LENGTH)
     }
+  }
+  if (entry.id === 'group-chat-gate') {
+    const limits = [
+      ['chancePercent', '接话概率', 0, 100],
+      ['debounceSeconds', '静默合并', 0, 300],
+      ['backlogMax', '积压上限', 0, 100],
+      ['minIntervalSeconds', '最短间隔', 0, 86400],
+      ['maxPerHour', '每小时上限', 0, 1000],
+      ['maxPerDay', '每天上限', 0, 10000],
+    ]
+    for (const [key, label, min, max] of limits) {
+      const value = Number(values[key])
+      if (values[key].trim() === '' || !Number.isInteger(value) || value < min || value > max) {
+        throw new Error(`${label}必须是 ${min}–${max} 的整数`)
+      }
+    }
+    if (!['true', 'false'].includes(values.filterInvalid)) throw new Error('无效文字过滤设置无效')
   }
   return {
     enabled: source.enabled === true,
@@ -291,7 +308,8 @@ function publicFeature(entry, feature, statePath, credential, credentialStatuses
     timeZone: feature.timeZone ?? 'Asia/Shanghai',
     cronValid: feature.scheduleMode !== 'cron' || parseCronList(feature.cron ?? '') !== undefined,
     cronDescription: feature.scheduleMode === 'cron' ? describeCron(feature.cron ?? '') : null,
-    nextRunAt: nextRunAt(feature),
+    nextRunAt: entry.realtime ? null : nextRunAt(feature),
+    realtime: entry.realtime === true,
     ...(entry.id === 'cs2-matches' ? {
       tierMode: feature.tierMode ?? 'legacy',
       deliveryMode: feature.deliveryMode === 'service-turn' ? 'service-turn' : 'direct',
@@ -337,6 +355,8 @@ export function createFeatureRuntime(options) {
   const statePath = options.statePath ?? STATE_PATH
   const now = options.now ?? (() => Date.now())
   const providers = new Map()
+  const saveListeners = new Map()
+  const runtimeErrors = new Map()
   const running = new Set()
   let timer = null
   let startup = null
@@ -371,9 +391,28 @@ export function createFeatureRuntime(options) {
     const features = []
     for (const entry of entries) {
       const feature = state.features[entry.id] ?? defaultFeature(entry)
-      features.push(await publicFeatureWithCredentials(entry, feature))
+      features.push({ ...await publicFeatureWithCredentials(entry, feature), runtimeError: runtimeErrors.get(entry.id) ?? '' })
     }
     return { features, settings: state.settings }
+  }
+
+  function getFeature(id) {
+    const entry = descriptor(id, entries)
+    return read().features[id] ?? defaultFeature(entry)
+  }
+
+  function setRuntimeError(id, error) {
+    descriptor(id, entries)
+    if (error) runtimeErrors.set(id, String(error))
+    else runtimeErrors.delete(id)
+  }
+
+  function onSave(id, listener) {
+    descriptor(id, entries)
+    const listeners = saveListeners.get(id) ?? new Set()
+    listeners.add(listener)
+    saveListeners.set(id, listeners)
+    return () => listeners.delete(listener)
   }
 
   function saveSettings(input) {
@@ -389,7 +428,7 @@ export function createFeatureRuntime(options) {
     const state = read()
     if (hasTarget && submittedTargets.length === 0 && entries.some((entry) => {
       const feature = state.features[entry.id]
-      return feature?.enabled === true && readSessionIds(feature.target?.sessionIds, feature.target?.sessionId).length === 0
+      return entry.realtime !== true && feature?.enabled === true && readSessionIds(feature.target?.sessionIds, feature.target?.sessionId).length === 0
     })) {
       throw new Error('已启用的模组仍使用全局默认目标，请先指定独立目标或关闭模组')
     }
@@ -411,7 +450,7 @@ export function createFeatureRuntime(options) {
       }
     }
     const state = read()
-    if (submitted.enabled && submitted.target.sessionIds.length === 0 && state.settings.defaultTargetSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
+    if (!entry.realtime && submitted.enabled && submitted.target.sessionIds.length === 0 && state.settings.defaultTargetSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
 
     const credentials = ctx.get('credentials')
     const ref = credentialRefFor(id, submitted.source.id)
@@ -439,12 +478,14 @@ export function createFeatureRuntime(options) {
     }
     state.features[id] = feature
     writeStateFile(statePath, state)
+    for (const listener of saveListeners.get(id) ?? []) listener(feature)
     return publicFeatureWithCredentials(entry, feature)
   }
 
   /** A provider may later fill this in; until then a run only records the gap. */
   function run(id, { manual = false, forceResend = false, noticeMode, eligibleAt } = {}) {
     const entry = descriptor(id, entries)
+    if (entry.realtime) return { skipped: true, reason: 'realtime' }
     const state = read()
     const feature = state.features[id] ?? defaultFeature(entry)
     const rules = id === 'cs2-matches' ? migrateCs2NoticeRules(feature) : null
@@ -565,6 +606,7 @@ export function createFeatureRuntime(options) {
   async function tick() {
     const state = read()
     for (const entry of entries) {
+      if (entry.realtime) continue
       const feature = state.features[entry.id]
       if (feature === undefined || feature.enabled !== true) continue
       if (!providers.has(entry.id)) continue
@@ -628,5 +670,5 @@ export function createFeatureRuntime(options) {
     startup = null
   }
 
-  return { snapshot, save, saveSettings, run, tick, registerProvider, start, stop, providers }
+  return { snapshot, getFeature, setRuntimeError, onSave, save, saveSettings, run, tick, registerProvider, start, stop, providers }
 }

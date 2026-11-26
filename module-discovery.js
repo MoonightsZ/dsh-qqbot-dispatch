@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const DEFAULT_ROOT = join(dirname(fileURLToPath(import.meta.url)), 'modules')
-const BUILT_IN_IDS = new Set(['cs2-matches', 'casual-chat'])
+const BUILT_IN_IDS = new Set(['cs2-matches', 'casual-chat', 'group-chat-gate'])
 const MODULE_ID = /^[a-z][a-z0-9-]{0,63}$/
 const FIELD_KEY = /^[a-z][a-zA-Z0-9]{0,63}$/
 
@@ -43,6 +43,7 @@ function validateManifest(raw, id) {
     },
     fields,
     extension: !BUILT_IN_IDS.has(id),
+    realtime: id === 'group-chat-gate' && raw.realtime === true,
   }
 }
 

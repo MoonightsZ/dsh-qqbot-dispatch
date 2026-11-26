@@ -6,6 +6,7 @@ import { createSessionTables } from '../client/tables.js'
 import { createFeatureCard } from '../modules/cs2-matches/card.js'
 import { createChatCard } from '../modules/casual-chat/card.js'
 import { createExtensionCard } from '../client/extension-card.js'
+import { createGroupGateCard } from '../modules/group-chat-gate/card.js'
 
 const h = (type, props, ...children) => ({ type, props, children })
 const React = {
@@ -15,6 +16,16 @@ const React = {
   useState: (value) => [value, () => {}],
 }
 const common = createCommon({ h, C, styles })
+
+test('群聊频控卡片明确实时范围且没有目标会话或立即运行按钮', () => {
+  const Card = createGroupGateCard({ React, h, styles, ...common, FEATURES_PATH: '/features' })
+  const view = Card({ feature: { id: 'group-chat-gate', label: '群聊频控', enabled: false, values: {} },
+    onSaved: () => {}, onNotice: () => {} })
+  const text = JSON.stringify(view)
+  assert.match(text, /未 @ 的纯文字群消息/)
+  assert.match(text, /附件直接放行/)
+  assert.doesNotMatch(text, /目标会话|立即运行|全局通知投递/)
+})
 
 test('扩展模组使用通用卡片，关闭时不能立即运行', () => {
   const ExtensionCard = createExtensionCard({ React, h, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })

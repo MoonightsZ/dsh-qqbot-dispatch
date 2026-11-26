@@ -9,7 +9,7 @@ export function createGlobalTargetSettings({ React, h, styles, postJson, SETTING
     const [selected, setSelected] = useState(settings.defaultTargetSessionIds ?? [])
     const [busy, setBusy] = useState(false)
     const targetOptions = sessionTargetOptions(sessions, selected)
-    const inheriting = features.filter((feature) => (feature.target?.sessionIds ?? []).length === 0)
+    const inheriting = features.filter((feature) => feature.realtime !== true && (feature.target?.sessionIds ?? []).length === 0)
     const enabledInheriting = inheriting.filter((feature) => feature.enabled)
     const clearingActiveTarget = selected.length === 0 && enabledInheriting.length > 0
     const changed = JSON.stringify(selected) !== JSON.stringify(settings.defaultTargetSessionIds ?? [])
@@ -29,7 +29,7 @@ export function createGlobalTargetSettings({ React, h, styles, postJson, SETTING
     }
 
     return h('div', { style: { ...styles.panel, padding: '18px 20px' } },
-      h('p', { style: { ...styles.desc, marginTop: 0, marginBottom: 14 } }, '未单独指定目标的模组会使用此目标组；可同时选择群聊和私聊。模组仍可选择自己的目标组。'),
+      h('p', { style: { ...styles.desc, marginTop: 0, marginBottom: 14 } }, '未单独指定目标的通知模组会使用此目标组；可同时选择群聊和私聊。通知模组仍可选择自己的目标组。'),
       h('div', { style: styles.field },
         h('span', { style: styles.label }, '默认目标会话'),
         h(TargetPicker, { sessions, selectedIds: selected, onChange: setSelected, onRefreshSessions, label: '默认目标会话' }),
