@@ -54,7 +54,7 @@ export async function apply(ctx, config = {}) {
     const provider = id === 'cs2-matches'
       ? createCs2Provider({ notificationDispatcher })
       : id === 'casual-chat'
-        ? createChatProvider({ notificationDispatcher })
+        ? createChatProvider({ notificationDispatcher, resolver })
         : createLazyProvider(module.providerPath, { notificationDispatcher })
     features.registerProvider(id, provider)
   }

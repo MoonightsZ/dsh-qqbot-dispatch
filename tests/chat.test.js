@@ -60,6 +60,40 @@ test('自动闲聊按小时冷却，满足条件后提交服务回合', async ()
   assert.equal(third.sent, 1)
 })
 
+test('群聊服务回合优先延续本群讨论，无合适内容时才搜索公开话题', async () => {
+  const calls = []
+  const resolver = { knownPeers: () => [
+    { sessionId: 'group-one', scope: 'group', peerId: 'group-openid' },
+    { sessionId: 'private-one', scope: 'c2c', peerId: 'user-openid' },
+  ] }
+  const provider = createChatProvider({ resolver, serviceTurn: { dispatch: async (value) => calls.push(value) },
+    upstreamSender: { send: async () => { throw new Error('动态话题不应直接发送') } }, random: () => 0 })
+  const feature = { values: { interestHint: 'CS2、游戏', avoidHint: '广告', topics: [] }, lastSentAt: 0 }
+  const privateResult = await provider({ feature, settings: { deliveryMethod: 'service-turn' }, target: { sessionId: 'private-one' }, now: () => 1000, manual: true })
+  assert.equal(privateResult.sent, 0)
+  assert.match(privateResult.warning, /仅支持群聊/)
+  const result = await provider({ feature, settings: { deliveryMethod: 'service-turn' }, target: { sessionId: 'group-one' }, now: () => 1000, manual: true })
+  assert.equal(result.sent, 1)
+  assert.equal(calls.length, 1)
+  assert.match(calls[0].text, /最近群聊/)
+  assert.match(calls[0].text, /web_search/)
+  assert.match(calls[0].text, /CS2、游戏/)
+  assert.match(calls[0].text, /广告/)
+  assert.match(calls[0].text, /不要.*OpenID.*搜索/)
+})
+
+test('旧话题仍保留，新增群聊偏好可保存', async () => {
+  const statePath = join(mkdtempSync(join(tmpdir(), 'qqbot-chat-')), 'state.json')
+  const runtime = createFeatureRuntime({ ctx: { get: () => undefined }, statePath })
+  await runtime.save('casual-chat', { target: { sessionId: 'group-one' }, values: {
+    interestHint: '游戏', avoidHint: '广告', topics: [{ id: 'old', text: '聊聊比赛？', tags: [], enabled: true }],
+  } })
+  const values = (await runtime.snapshot()).features.find((entry) => entry.id === 'casual-chat').values
+  assert.equal(values.interestHint, '游戏')
+  assert.equal(values.avoidHint, '广告')
+  assert.equal(values.topics[0].text, '聊聊比赛？')
+})
+
 test('全局 SDK 模式将选中的闲聊话题直接发送', async () => {
   const sent = []
   const provider = createChatProvider({

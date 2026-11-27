@@ -30,7 +30,12 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
     const [modelLabel, setModelLabel] = useState('')
     const [tagFilter, setTagFilter] = useState('')
     const [busy, setBusy] = useState(false)
-    const targetOptions = featureTargetOptions(sessions, sessionIds, settings?.defaultTargetSessionIds ?? [])
+    const [interestHint, setInterestHint] = useState(String(values.interestHint ?? ''))
+    const [avoidHint, setAvoidHint] = useState(String(values.avoidHint ?? ''))
+    const groupSessions = sessions.filter((session) => session.scope === 'group')
+    const groupIds = new Set(groupSessions.map((session) => session.sessionId))
+    const groupDefaults = (settings?.defaultTargetSessionIds ?? []).filter((id) => groupIds.has(id))
+    const targetOptions = featureTargetOptions(groupSessions, sessionIds, groupDefaults)
 
     const payload = (nextEnabled) => {
       const [hour, minute] = checkTime.split(':').map(Number)
@@ -42,12 +47,12 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
         scheduleMode: 'cron',
         cron: [`${minute} ${hour} * * *`],
         timeZone: feature.timeZone ?? 'Asia/Shanghai',
-        values: { chancePercent, cooldownHours, quietStart, quietEnd, topics },
+        values: { chancePercent, cooldownHours, quietStart, quietEnd, interestHint, avoidHint, topics },
       }
     }
 
     const persist = async (nextEnabled) => {
-      if (nextEnabled !== false && targetOptions.effectiveSessionIds.length === 0) throw new Error('请先设置全局默认目标或选择模组目标会话')
+      if (nextEnabled !== false && targetOptions.effectiveSessionIds.length === 0) throw new Error('请先选择群聊目标，或在全局默认目标中加入群聊')
       if (nextEnabled !== false && targetOptions.invalidSelected) throw new Error(targetOptions.unavailableSelected ? '目标群不可用，请先同步群名确认' : '目标会话已失效，请重新选择')
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(checkTime)) throw new Error('每日检查时间无效')
       const next = await postJson(FEATURES_PATH, payload(nextEnabled))
@@ -156,11 +161,11 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
       ),
       open ? h('div', null,
         h('p', { style: styles.desc }, settings?.deliveryMethod === 'upstream-sdk'
-          ? '当前全局使用上游 QQ Bot 直接发送：选中的话题会作为开场白原文发出，不结合会话上下文生成。'
+          ? '仅用于群聊。当前全局使用上游 QQ Bot 直接发送：备用话题会作为开场白原文发出，不使用群聊上下文或搜索工具。'
           : feature.description),
         h('div', { style: styles.grid },
-          field('目标会话', h(TargetPicker, { sessions, selectedIds: sessionIds, onChange: setSessionIds, onRefreshSessions,
-            label: '目标会话', inheritLabel: targetOptions.defaultLabel })),
+          field('目标群聊', h(TargetPicker, { sessions: groupSessions, selectedIds: sessionIds, onChange: setSessionIds, onRefreshSessions,
+            label: '目标群聊', inheritLabel: targetOptions.defaultLabel })),
           field('每日检查时间', h('input', { style: styles.input, type: 'time', value: checkTime, onChange: (event) => setCheckTime(event.target.value) })),
           field('触发概率（%）', numberInput(chancePercent, setChancePercent, 0, 100)),
           field('发送冷却（小时）', numberInput(cooldownHours, setCooldownHours, 1, 720)),
@@ -168,8 +173,15 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
           field('安静时段结束（小时）', numberInput(quietEnd, setQuietEnd, 0, 23)),
         ),
         h('section', { style: { marginTop: 18, borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 16 } },
-          h('h3', { style: { margin: '0 0 6px', fontSize: 14 } }, '话题池'),
-          h('p', { style: styles.desc }, '话题提示按标签先随机、再选话题；直接发送 Markdown 时会原文发送。修改后请保存。'),
+          h('h3', { style: { margin: '0 0 6px', fontSize: 14 } }, 'AI 话题来源'),
+          h('p', { style: styles.desc }, '服务回合先延续本群可见的最近讨论；没有合适话题时，若 Agent 可使用 web_search，则检索近期公开话题。以下偏好可选，不需要手工录入话题池。'),
+          h('div', { style: styles.grid },
+            field('群聊兴趣方向（可选）', h('input', { style: styles.input, value: interestHint, maxLength: 120, placeholder: '例如：CS2、游戏、电影', onChange: (event) => setInterestHint(event.target.value) })),
+            field('避谈内容（可选）', h('input', { style: styles.input, value: avoidHint, maxLength: 120, placeholder: '例如：广告、争议话题', onChange: (event) => setAvoidHint(event.target.value) }))),
+        ),
+        h('details', { style: { marginTop: 18, borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 16 } },
+          h('summary', { style: { cursor: 'pointer', fontSize: 14, fontWeight: 600 } }, '备用话题池（可选）'),
+          h('p', { style: styles.desc }, '服务回合仅在缺少合适的群聊或搜索话题时参考话题提示；直接发送 Markdown 时会原文发送。修改后请保存。'),
           h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', margin: '12px 0' } },
             field('按主题词 AI 推荐', h('input', { style: styles.input, value: keyword, maxLength: 80, placeholder: '例如：CS2 赛事', onChange: (event) => setKeyword(event.target.value) }), { flex: '1 1 220px' }),
             h('button', { type: 'button', style: styles.ghostButton, disabled: suggesting, onClick: () => { void recommend() } }, suggesting ? '生成中…' : 'AI 推荐')),
@@ -198,7 +210,7 @@ export function createChatCard({ React, h, C, styles, formatRelative, readJson, 
               topic.sourceKeyword ? h('span', { style: styles.desc }, `来源主题词：${topic.sourceKeyword}`) : null))),
         ),
         targetOptions.invalidSelected ? h('p', { style: styles.warnText }, targetOptions.unavailableSelected ? '目标群不可用，请同步群名确认后再使用。' : '目标会话已失效，请重新选择并保存。') : null,
-        h('p', { style: styles.desc }, '会话设置在「配置」页；此处不选择将继承整组全局默认目标。'),
+        h('p', { style: styles.desc }, '群聊会话设置在「配置」页；此处不选择将继承全局默认目标中的群聊，私聊目标会跳过。'),
         h('p', { style: styles.desc }, `执行时间：每天 ${checkTime}（${feature.timeZone ?? 'Asia/Shanghai'}）。自动闲聊会按概率、冷却和安静时段判断；“立即发起”会跳过这些条件。`),
         h('p', { style: styles.desc },
           (cronRules(feature.cron)[0] ?? '') !== (() => { const [hour, minute] = checkTime.split(':').map(Number); return `${minute} ${hour} * * *` })()

@@ -118,9 +118,28 @@ test('偶尔闲聊使用独立设置卡片', () => {
   assert.match(JSON.stringify(view), /发送冷却（小时）/)
   assert.match(JSON.stringify(view), /话题提示/)
   assert.match(JSON.stringify(view), /话题池/)
+  assert.match(JSON.stringify(view), /AI 话题来源/)
+  assert.match(JSON.stringify(view), /群聊兴趣方向/)
   assert.match(JSON.stringify(view), /AI 推荐/)
   assert.match(JSON.stringify(view), /下次计划执行/)
   assert.match(JSON.stringify(view), /TargetPicker|inheritLabel/)
+})
+
+test('偶尔闲聊目标选择只列出群聊', () => {
+  const ChatCard = createChatCard({ React, h, C, styles, ...common, FEATURES_PATH: '/features', FEATURES_RUN_PATH: '/features/run' })
+  const view = ChatCard({ feature: { id: 'casual-chat', label: '偶尔闲聊', target: { sessionIds: [] }, values: {} },
+    settings: { defaultTargetSessionIds: ['group-one', 'private-one'] },
+    sessions: [{ sessionId: 'group-one', scope: 'group', title: '群聊' }, { sessionId: 'private-one', scope: 'c2c', title: '私聊' }],
+    open: true, onSaved: () => {}, onRun: () => {}, onNotice: () => {} })
+  const findPicker = (node) => {
+    if (Array.isArray(node)) return node.map(findPicker).find(Boolean)
+    if (!node || typeof node !== 'object') return null
+    if (node.type?.name === 'TargetPicker') return node
+    return findPicker(node.children)
+  }
+  const picker = findPicker(view)
+  assert.equal(picker.props.label, '目标群聊')
+  assert.deepEqual(picker.props.sessions.map((item) => item.sessionId), ['group-one'])
 })
 
 test('AI 候选须手选加入话题池，保存后才进入配置', async () => {
@@ -163,10 +182,15 @@ test('AI 候选须手选加入话题池，保存后才进入配置', async () =>
   find(view, (node) => node.type === 'button' && node.children.includes('加入话题池')).props.onClick()
   view = render()
   assert.match(JSON.stringify(view), /来聊 CS2 吗？/)
+  find(view, (node) => node.type === 'input' && node.props.placeholder === '例如：CS2、游戏、电影').props.onChange({ target: { value: 'CS2' } })
+  find(render(), (node) => node.type === 'input' && node.props.placeholder === '例如：广告、争议话题').props.onChange({ target: { value: '广告' } })
+  view = render()
   find(view, (node) => node.type === 'button' && node.children.includes('保存')).props.onClick()
   await done
   assert.equal(payload.values.topics[0].text, '来聊 CS2 吗？')
   assert.deepEqual(payload.values.topics[0].tags, ['CS2'])
+  assert.equal(payload.values.interestHint, 'CS2')
+  assert.equal(payload.values.avoidHint, '广告')
 })
 
 test('话题全部禁用时立即发起提示跳过', async () => {
